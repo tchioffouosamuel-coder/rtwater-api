@@ -20,6 +20,13 @@ return Application::configure(basePath: dirname(__DIR__))
             'verified' => \App\Http\Middleware\EnsureEmailIsVerified::class,
         ]);
 
+    $middleware->alias([
+        'role' => \App\Http\Middleware\CheckRole::class,
+        // Donne le nom 'role' à notre middleware
+        // Permet d'écrire middleware('role:admin')
+        // au lieu de middleware(CheckRole::class . ':admin')
+    ]);
+
         //
     })
     ->withExceptions(function (Exceptions $exceptions): void {
