@@ -7,8 +7,28 @@ use App\Http\Controllers\Api\OrderController;
 use App\Http\Controllers\Api\ProductController;
 use App\Http\Controllers\Api\RoleController;
 use App\Http\Controllers\Api\ServiceController;
+use App\Http\Controllers\Auth\AuthenticatedSessionController;
+use App\Http\Controllers\Auth\RegisteredUserController;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Route;
+
+
+
+// ════════════════════════════════════════════════
+// ROUTES AUTH — sous le préfixe /api
+// ════════════════════════════════════════════════
+
+Route::post('/login', [AuthenticatedSessionController::class, 'store']);
+// POST /api/login → connexion
+
+Route::post('/register', [RegisteredUserController::class, 'store']);
+// POST /api/register → inscription
+
+Route::post('/logout', [AuthenticatedSessionController::class, 'destroy'])
+    ->middleware('auth:sanctum');
+// POST /api/logout → déconnexion (token requis)
+
+// ... reste de tes routes
 
 // ════════════════════════════════════════════════
 // ROUTES PUBLIQUES — accessibles sans être connecté
