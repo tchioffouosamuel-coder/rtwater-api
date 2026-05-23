@@ -15,8 +15,8 @@ class Product extends Model
         'description',
         'price',
         'stock',
-        'image',
-        'is_active',
+        'image_url',
+        'is_available',
     ];
 
     protected function casts(): array
@@ -26,11 +26,11 @@ class Product extends Model
             // Garantit que price est toujours retourné avec 2 décimales
             // 999 → "999.00"  /  999.9 → "999.90"
 
-            'is_active' => 'boolean',
+            'is_available' => 'boolean',
             // MySQL stocke 0 ou 1 dans la colonne TINYINT
             // 'boolean' → Laravel convertit automatiquement
             // 0 → false  /  1 → true
-            // Utilisation : if ($product->is_active) { ... }
+            // Utilisation : if ($product->is_available) { ... }
         ];
     }
 
@@ -67,10 +67,10 @@ class Product extends Model
 
     public function scopeActive(Builder $query)
     {
-        return $query->where('is_active', true);
+        return $query->where('is_available', true);
         // Un "scope" c'est un filtre réutilisable qu'on peut chaîner
         // Sans scope :
-        // Product::where('is_active', true)->get()
+        // Product::where('is_available', true)->get()
         //
         // Avec scope :
         // Product::active()->get()
