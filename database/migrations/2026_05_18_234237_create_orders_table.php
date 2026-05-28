@@ -6,37 +6,37 @@ use Illuminate\Support\Facades\Schema;
 
 return new class extends Migration
 {
-    /**
-     * Run the migrations.
-     */
     public function up(): void
     {
         Schema::create('orders', function (Blueprint $table) {
             $table->id();
-            $table->foreignId('users')
-            ->constrained()
-            ->onDelete('cascade');
+
+            $table->foreignId('user_id')
+                ->constrained()
+                ->onDelete('cascade');
+            // ✅ user_id (pas 'users')
+            // Laravel cherche automatiquement la table 'users'
+            // grâce au nom 'user_id'
+
             $table->decimal('total', 10, 2);
+
             $table->enum('status', [
-                'pending',    // En attente de paiement
-                'paid',       // Paiement reçu
-                'shipped',    // Colis envoyé
-                'delivered',  // Colis reçu par le client
-                'cancelled'   // Commande annulée
+                'pending',
+                'paid',
+                'shipped',
+                'delivered',
+                'cancelled'
             ])->default('pending');
-            // Cycle de vie d'une commande
-            // pending → paid → shipped → delivered
-            //        ↘ cancelled (à tout moment)
+
+            $table->text('address');
+            // ✅ address (pas 'adresse')
+            // text() au lieu de string() car adresse peut être longue
 
             $table->timestamps();
-            $table->string('adresse');
-
+            // ✅ toujours à la fin
         });
     }
 
-    /**
-     * Reverse the migrations.
-     */
     public function down(): void
     {
         Schema::dropIfExists('orders');
