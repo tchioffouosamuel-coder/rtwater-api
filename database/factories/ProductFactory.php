@@ -15,29 +15,30 @@ class ProductFactory extends Factory
                 ->value('id'),
 
             'name' => $this->faker->randomElement([
-                'Smartphone Samsung',
-                'iPhone 15',
-                'Laptop Dell',
-                'Casque Sony',
-                'Tablette iPad',
-                'Montre connectée',
-                'Chargeur USB-C',
-                'Clavier mécanique',
-                'Souris gaming',
-                'Écran 4K',
-                'Webcam HD',
-                'Disque SSD',
-            ]) . ' ' . $this->faker->bothify('?? ##'),
+                'Pompe immergée Grundfos',
+                'Pompe de surface Pedrollo',
+                'Filtre à sable piscine',
+                'Osmoseur domestique 5 étages',
+                'Chlore choc granulés 5kg',
+                'Hypochlorite de calcium 65%',
+                'Traitement anti-algues piscine',
+                'Pompe doseuse automatique',
+                'Adoucisseur d\'eau 25L',
+                'Cartouche filtrante 10 pouces',
+                'UV stérilisateur 40W',
+                'Compteur eau volumétrique',
+                'Robinet flotteur laiton',
+                'Tuyau PEHD 32mm rouleau 100m',
+                'Groupe motopompe diesel 3 pouces',
+            ]) . ' ' . $this->faker->bothify('## ##'),
 
             'description' => $this->faker->paragraphs(2, true),
-            'price'       => $this->faker->randomFloat(2, 5, 2000),
-            'stock'       => $this->faker->numberBetween(0, 100),
+            'price'       => $this->faker->randomFloat(2, 5000, 850000),
+            'stock'       => $this->faker->numberBetween(0, 50),
 
-            'image_url'    => null,
-            // ✅ image_url au lieu de image
+            'image_url'   => null,
 
             'is_available' => $this->faker->boolean(85),
-            // ✅ is_available au lieu de is_active
         ];
     }
 
