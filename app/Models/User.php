@@ -14,6 +14,8 @@ class User extends Authenticatable
     protected $fillable = [
         'name',
         'email',
+        'phone',
+        'address',
         'password',
     ];
     // On retire 'role' car le rôle est maintenant dans une table séparée

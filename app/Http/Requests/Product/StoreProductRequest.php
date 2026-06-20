@@ -18,12 +18,17 @@ class StoreProductRequest extends FormRequest
     public function rules(): array
     {
         return [
-            'category_id' => 'required|exists:categories,id',
-            'name'        => 'required|string|max:255',
-            'description' => 'nullable|string',
-            'price'       => 'required|numeric|min:0',
-            'stock'       => 'required|integer|min:0',
-            'image_url'   => 'nullable|image|max:2048',
+            'category_id'  => 'required|exists:categories,id',
+            'name'         => 'required|string|max:255',
+            'sku'          => 'nullable|string|max:100|unique:products,sku',
+            'description'  => 'nullable|string',
+            'price'        => 'required|numeric|min:0',
+            'cost'         => 'nullable|numeric|min:0',
+            'stock'        => 'required|integer|min:0',
+            'min_quantity' => 'nullable|integer|min:0',
+            'max_quantity' => 'nullable|integer|min:0',
+            'location'     => 'nullable|string|max:255',
+            'image_url'    => 'nullable|image|max:2048',
             'is_available' => 'boolean',
         ];
     }

@@ -38,9 +38,26 @@ class Order extends Model
     public function items()
     {
         return $this->hasMany(OrderItem::class);
-        // Une Order a plusieurs OrderItems
-        // On appelle la méthode "items" (pas "orderItems")
-        // pour un usage plus naturel : $order->items
+    }
+
+    public function payment()
+    {
+        return $this->hasOne(Payment::class)->latestOfMany();
+    }
+
+    public function payments()
+    {
+        return $this->hasMany(Payment::class);
+    }
+
+    public function invoice()
+    {
+        return $this->hasOne(Invoice::class);
+    }
+
+    public function stockMovements()
+    {
+        return $this->hasMany(StockMovement::class);
     }
 
     // ═══════════════════════════════

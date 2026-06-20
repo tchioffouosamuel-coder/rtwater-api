@@ -13,6 +13,8 @@ class UserResource extends JsonResource
             'id'         => $this->id,
             'name'       => $this->name,
             'email'      => $this->email,
+            'phone'      => $this->phone,
+            'address'    => $this->address,
 
             'roles'      => RoleResource::collection($this->whenLoaded('roles')),
             // RoleResource::collection() → formate une LISTE de roles

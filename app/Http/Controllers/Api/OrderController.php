@@ -7,12 +7,76 @@ use App\Http\Resources\OrderResource;
 use App\Models\CartItem;
 use App\Models\Order;
 use App\Models\OrderItem;
+use App\Models\Product;
+use App\Models\Role;
+use App\Models\User;
 use Illuminate\Http\Request;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Str;
 
 class OrderController extends Controller
 {
+    /**
+     * POST /api/admin/pos-order
+     * Enregistre une vente caisse (POS) en mode admin. Crée l'ordre directement en statut "paid".
+     */
+    public function posStore(Request $request): JsonResponse
+    {
+        $validated = $request->validate([
+            'items'             => 'required|array|min:1',
+            'items.*.product_id'=> 'required|integer|exists:products,id',
+            'items.*.quantity'  => 'required|integer|min:1',
+        ]);
+
+        $lines    = collect($validated['items']);
+        $products = Product::whereIn('id', $lines->pluck('product_id'))->get()->keyBy('id');
+
+        // Stock check
+        foreach ($lines as $item) {
+            $product = $products->get($item['product_id']);
+            if (!$product) {
+                return response()->json(['message' => 'Produit introuvable.'], 422);
+            }
+            if ($product->stock < $item['quantity']) {
+                return response()->json([
+                    'message' => "Stock insuffisant pour « {$product->name} ». Disponible : {$product->stock}",
+                ], 422);
+            }
+        }
+
+        $total = $lines->sum(fn($item) => $item['quantity'] * $products->get($item['product_id'])->price);
+
+        $order = DB::transaction(function () use ($request, $lines, $products, $total) {
+            $order = Order::create([
+                'user_id' => $request->user()->id,
+                'total'   => $total,
+                'status'  => 'paid',
+                'address' => 'Vente en caisse — Yaoundé',
+            ]);
+
+            foreach ($lines as $item) {
+                $product = $products->get($item['product_id']);
+                OrderItem::create([
+                    'order_id'   => $order->id,
+                    'product_id' => $product->id,
+                    'quantity'   => $item['quantity'],
+                    'price'      => $product->price,
+                ]);
+                $product->decrement('stock', $item['quantity']);
+            }
+
+            return $order;
+        });
+
+        $order->load('items.product', 'user');
+
+        return response()->json([
+            'message' => 'Vente enregistrée',
+            'data'    => new OrderResource($order),
+        ], 201);
+    }
+
     public function index(Request $request): JsonResponse
     // Liste les commandes de l'utilisateur connecté
     {
@@ -44,109 +108,154 @@ class OrderController extends Controller
     }
 
     public function store(Request $request): JsonResponse
-    // Crée une commande à partir du panier de l'utilisateur
+    // Crée une commande à partir du panier de l'utilisateur ou d'une commande express client
     {
-        $validated = $request->validate([
+        $user = $request->user();
+
+        $rules = [
             'address' => 'required|string|max:500',
-            // Adresse de livraison obligatoire
-        ]);
+        ];
 
-        $cartItems = $request->user()
-            ->cartItems()
-            ->with('product')
-            ->get();
-        // Récupère tous les articles du panier de l'user connecté
-        // avec leurs produits associés
-
-        if ($cartItems->isEmpty()) {
-            return response()->json([
-                'message' => 'Votre panier est vide',
-            ], 422);
-            // On ne peut pas commander avec un panier vide
+        if ($user) {
+            $rules['items'] = 'sometimes|array|min:1';
+            $rules['items.*.product_id'] = 'required_with:items|integer|exists:products,id';
+            $rules['items.*.quantity'] = 'required_with:items|integer|min:1';
+        } else {
+            $rules['name'] = 'required|string|max:255';
+            $rules['phone'] = 'required|string|max:20';
+            $rules['items'] = 'required|array|min:1';
+            $rules['items.*.product_id'] = 'required|integer|exists:products,id';
+            $rules['items.*.quantity'] = 'required|integer|min:1';
         }
 
-        // Vérification du stock pour chaque article
-        foreach ($cartItems as $item) {
-            // foreach → boucle sur chaque article du panier
-            if ($item->product->stock < $item->quantity) {
+        $validated = $request->validate($rules);
+
+        $orderLines = collect($validated['items'] ?? []);
+        $cartItems = null;
+
+        if ($orderLines->isEmpty()) {
+            if (!$user) {
                 return response()->json([
-                    'message' => 'Stock insuffisant pour le produit : '
-                        . $item->product->name
-                        . '. Stock disponible : '
-                        . $item->product->stock,
+                    'message' => 'Les articles de la commande sont requis.',
                 ], 422);
-                // Si un seul produit n'a pas assez de stock
-                // → on arrête tout et on retourne une erreur
+            }
+
+            $cartItems = $user->cartItems()->with('product')->get();
+            if ($cartItems->isEmpty()) {
+                return response()->json([
+                    'message' => 'Votre panier est vide',
+                ], 422);
             }
         }
 
-        // Calcul du total de la commande
-        $total = $cartItems->sum(function ($item) {
-            return $item->quantity * $item->product->price;
-            // Prix au moment de l'achat
+        if ($orderLines->isNotEmpty()) {
+            $products = Product::whereIn('id', $orderLines->pluck('product_id'))->get()->keyBy('id');
+            $orderLines = $orderLines->map(function ($item) use ($products) {
+                return [
+                    'product' => $products->get($item['product_id']),
+                    'quantity' => $item['quantity'],
+                ];
+            });
+        } else {
+            $orderLines = $cartItems->map(function ($item) {
+                return [
+                    'product' => $item->product,
+                    'quantity' => $item->quantity,
+                    'cart_id' => $item->id,
+                ];
+            });
+        }
+
+        foreach ($orderLines as $line) {
+            if (!$line['product']) {
+                return response()->json([
+                    'message' => 'Produit introuvable dans la commande.',
+                ], 422);
+            }
+
+            if ($line['product']->stock < $line['quantity']) {
+                return response()->json([
+                    'message' => 'Stock insuffisant pour le produit : '
+                        . $line['product']->name
+                        . '. Stock disponible : '
+                        . $line['product']->stock,
+                ], 422);
+            }
+        }
+
+        $client = $user;
+
+        if (!$client) {
+            $client = User::where('phone', $validated['phone'])->first();
+        }
+
+        if (!$client) {
+            $client = User::create([
+                'name' => $validated['name'],
+                'email' => 'guest+' . Str::random(12) . '@example.com',
+                'phone' => $validated['phone'],
+                'address' => $validated['address'],
+                'password' => bcrypt(Str::random(16)),
+            ]);
+            $client->assignRole(Role::USER);
+        } else {
+            $updated = false;
+
+            if (!$client->name && isset($validated['name'])) {
+                $client->name = $validated['name'];
+                $updated = true;
+            }
+
+            if (!$client->phone && isset($validated['phone'])) {
+                $client->phone = $validated['phone'];
+                $updated = true;
+            }
+
+            if (!$client->address && isset($validated['address'])) {
+                $client->address = $validated['address'];
+                $updated = true;
+            }
+
+            if ($updated) {
+                $client->save();
+            }
+        }
+
+        $total = $orderLines->sum(function ($line) {
+            return $line['quantity'] * $line['product']->price;
         });
 
-        // DB::transaction() → groupe plusieurs opérations SQL
-        // Si UNE opération échoue → TOUTES sont annulées (rollback)
-        // Si TOUTES réussissent → TOUTES sont validées (commit)
-        //
-        // Sans transaction :
-        // 1. Order créé ✅
-        // 2. OrderItems créés ✅
-        // 3. Stock mis à jour ❌ (erreur !)
-        // → Commande créée mais stock pas mis à jour = incohérence !
-        //
-        // Avec transaction :
-        // Si l'étape 3 échoue → étapes 1 et 2 sont annulées aussi
-        // → La DB reste cohérente
-
-        $order = DB::transaction(function () use ($cartItems, $total, $validated, $request) {
-            // use() → injecte les variables extérieures dans la closure
-            // Sans use(), $cartItems, $total, etc. ne seraient pas accessibles
-            // à l'intérieur de la fonction anonyme
-
-            // Étape 1 : Créer la commande
+        $order = DB::transaction(function () use ($client, $orderLines, $total, $validated, $user) {
             $order = Order::create([
-                'user_id' => $request->user()->id,
-                'total'   => $total,
-                'status'  => 'pending',
+                'user_id' => $client->id,
+                'total' => $total,
+                'status' => 'pending',
                 'address' => $validated['address'],
             ]);
 
-            // Étape 2 : Créer les articles de la commande
-            foreach ($cartItems as $item) {
+            foreach ($orderLines as $line) {
                 OrderItem::create([
-                    'order_id'   => $order->id,
-                    'product_id' => $item->product_id,
-                    'quantity'   => $item->quantity,
-                    'price'      => $item->product->price,
-                    // On sauvegarde le prix ACTUEL du produit
-                    // Car le prix peut changer demain
+                    'order_id' => $order->id,
+                    'product_id' => $line['product']->id,
+                    'quantity' => $line['quantity'],
+                    'price' => $line['product']->price,
                 ]);
 
-                // Étape 3 : Décrémenter le stock du produit
-                $item->product->decrement('stock', $item->quantity);
-                // decrement('stock', $quantity)
-                // → UPDATE products SET stock = stock - $quantity WHERE id = ?
-                // Opération atomique → thread-safe
-                // Pas de risque de race condition
+                $line['product']->decrement('stock', $line['quantity']);
             }
 
-            // Étape 4 : Vider le panier de l'utilisateur
-            $request->user()->cartItems()->delete();
-            // DELETE FROM cart_items WHERE user_id = ?
+            if ($user && $orderLines->first()['cart_id'] ?? false) {
+                $user->cartItems()->delete();
+            }
 
             return $order;
-            // On retourne la commande créée
-            // Elle sera disponible dans $order après DB::transaction()
         });
 
-        $order->load('items.product');
-        // Charge les relations pour la réponse JSON
+        $order->load('items.product', 'user');
 
         return response()->json([
             'message' => 'Commande créée avec succès',
-            'data'    => new OrderResource($order),
+            'data' => new OrderResource($order),
         ], 201);
     }
 

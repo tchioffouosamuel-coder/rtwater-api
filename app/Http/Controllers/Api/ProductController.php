@@ -17,6 +17,8 @@ class ProductController extends Controller
     {
         $products = Product::query()
             ->with('category')
+            ->withAvg('reviews as reviews_avg_rating', 'rating')
+            ->withCount('reviews')
             ->active()
             ->when($request->category_id, fn($q, $v) => $q->where('category_id', $v))
             ->when($request->search, fn($q, $v) => $q->where('name', 'like', "%$v%"))
@@ -60,7 +62,9 @@ class ProductController extends Controller
 
     public function show(Product $product): JsonResponse
     {
-        $product->load('category');
+        $product->load('category')
+            ->loadAvg('reviews as reviews_avg_rating', 'rating')
+            ->loadCount('reviews');
 
         return response()->json([
             'data' => new ProductResource($product),

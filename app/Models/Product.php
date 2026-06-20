@@ -12,9 +12,14 @@ class Product extends Model
     protected $fillable = [
         'category_id',
         'name',
+        'sku',
         'description',
         'price',
+        'cost',
         'stock',
+        'min_quantity',
+        'max_quantity',
+        'location',
         'image_url',
         'is_available',
     ];
@@ -57,8 +62,16 @@ class Product extends Model
     public function orderItems()
     {
         return $this->hasMany(OrderItem::class);
-        // Un Product peut être dans plusieurs order_items
-        // Utilisation : $product->orderItems
+    }
+
+    public function stockMovements()
+    {
+        return $this->hasMany(StockMovement::class);
+    }
+
+    public function reviews()
+    {
+        return $this->hasMany(Review::class);
     }
 
     // ═══════════════════════════════

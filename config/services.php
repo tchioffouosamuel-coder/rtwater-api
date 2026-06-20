@@ -35,4 +35,12 @@ return [
         ],
     ],
 
+    'sebpay' => [
+        'api_key'        => env('SEBPAY_API_KEY'),
+        'base_url'       => env('SEBPAY_BASE_URL', 'https://api.sebpay.com'),
+        'webhook_secret' => env('SEBPAY_WEBHOOK_SECRET'),
+        'country'        => env('SEBPAY_COUNTRY', 'BJ'),
+        'currency'       => env('SEBPAY_CURRENCY', 'XOF'),
+    ],
+
 ];

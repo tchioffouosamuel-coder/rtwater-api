@@ -15,11 +15,15 @@ class UpdateProductRequest extends FormRequest
     {
         return [
             'category_id'  => 'sometimes|exists:categories,id',
-            // sometimes → valide seulement si présent dans la requête
             'name'         => 'sometimes|string|max:255',
+            'sku'          => 'nullable|string|max:100|unique:products,sku,' . $this->route('product')?->id,
             'description'  => 'nullable|string',
             'price'        => 'sometimes|numeric|min:0',
+            'cost'         => 'nullable|numeric|min:0',
             'stock'        => 'sometimes|integer|min:0',
+            'min_quantity' => 'nullable|integer|min:0',
+            'max_quantity' => 'nullable|integer|min:0',
+            'location'     => 'nullable|string|max:255',
             'image_url'    => 'nullable|image|max:2048',
             'is_available' => 'sometimes|boolean',
         ];
