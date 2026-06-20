@@ -31,6 +31,9 @@ class DatabaseSeeder extends Seeder
             BookingSeeder::class,
             // 6. Enfin les réservations
             // car elles dépendent des users ET des services
+
+            PageSeeder::class,
+            // 7. Les pages CMS
         ]);
         // L'ordre est CRUCIAL :
         // Chaque seeder dépend de ceux qui le précèdent

@@ -39,6 +39,7 @@ class PageController extends Controller
     {
         $validated = $request->validate([
             'title'            => 'required|string|max:255',
+            'slug'             => 'nullable|string|max:255',
             'content'          => 'nullable|string',
             'meta_title'       => 'nullable|string|max:255',
             'meta_description' => 'nullable|string|max:500',
@@ -46,7 +47,12 @@ class PageController extends Controller
             'sort_order'       => 'integer|min:0',
         ]);
 
-        $validated['slug'] = Str::slug($validated['title']);
+        // Use provided slug (slugified) or generate from title
+        if (!empty($validated['slug'])) {
+            $validated['slug'] = Str::slug($validated['slug']);
+        } else {
+            $validated['slug'] = Str::slug($validated['title']);
+        }
 
         $base  = $validated['slug'];
         $count = 1;
@@ -65,6 +71,7 @@ class PageController extends Controller
     {
         $validated = $request->validate([
             'title'            => 'sometimes|string|max:255',
+            'slug'             => 'nullable|string|max:255',
             'content'          => 'nullable|string',
             'meta_title'       => 'nullable|string|max:255',
             'meta_description' => 'nullable|string|max:500',
@@ -72,7 +79,11 @@ class PageController extends Controller
             'sort_order'       => 'sometimes|integer|min:0',
         ]);
 
-        if (isset($validated['title'])) {
+        if ($request->has('slug') && !empty($validated['slug'])) {
+            // Slug explicitly provided — use it slugified
+            $validated['slug'] = Str::slug($validated['slug']);
+        } elseif (!$request->has('slug') && isset($validated['title'])) {
+            // No slug in request but title changed — auto-generate from title
             $validated['slug'] = Str::slug($validated['title']);
         }
 

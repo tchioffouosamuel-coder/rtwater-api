@@ -73,6 +73,7 @@ Route::middleware('auth:sanctum')->group(function () {
     // Commandes (utilisateur connecté)
     Route::get('/orders', [OrderController::class, 'index']);
     Route::get('/orders/{order}', [OrderController::class, 'show']);
+    Route::get('/orders/{order}/receipt', [OrderController::class, 'downloadReceipt']);
 
     // Avis produits (authentifié)
     Route::post('/products/{product}/reviews', [ReviewController::class, 'store']);
@@ -115,6 +116,7 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::get('/admin/orders', [OrderController::class, 'adminIndex']);
         Route::put('/admin/orders/{order}', [OrderController::class, 'updateStatus']);
         Route::post('/admin/pos-order', [OrderController::class, 'posStore']);
+        Route::get('/admin/orders/{order}/receipt', [OrderController::class, 'downloadReceipt']);
 
         // Réservations admin
         Route::get('/admin/bookings', [BookingController::class, 'adminIndex']);

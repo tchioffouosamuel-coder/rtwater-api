@@ -110,7 +110,8 @@ class OrderController extends Controller
     public function store(Request $request): JsonResponse
     // Crée une commande à partir du panier de l'utilisateur ou d'une commande express client
     {
-        $user = $request->user();
+        // Route publique → résoudre optionnellement l'utilisateur Sanctum sans middleware auth:sanctum
+        $user = auth('sanctum')->user();
 
         $rules = [
             'address' => 'required|string|max:500',
@@ -121,11 +122,12 @@ class OrderController extends Controller
             $rules['items.*.product_id'] = 'required_with:items|integer|exists:products,id';
             $rules['items.*.quantity'] = 'required_with:items|integer|min:1';
         } else {
-            $rules['name'] = 'required|string|max:255';
+            $rules['name']  = 'required|string|max:255';
+            $rules['email'] = 'nullable|string|email|max:255';
             $rules['phone'] = 'required|string|max:20';
             $rules['items'] = 'required|array|min:1';
             $rules['items.*.product_id'] = 'required|integer|exists:products,id';
-            $rules['items.*.quantity'] = 'required|integer|min:1';
+            $rules['items.*.quantity']   = 'required|integer|min:1';
         }
 
         $validated = $request->validate($rules);
@@ -185,16 +187,22 @@ class OrderController extends Controller
 
         $client = $user;
 
-        if (!$client) {
+        if (!$client && isset($validated['email'])) {
+            $client = User::where('email', $validated['email'])->first();
+        }
+
+        if (!$client && isset($validated['phone'])) {
             $client = User::where('phone', $validated['phone'])->first();
         }
 
         if (!$client) {
             $client = User::create([
-                'name' => $validated['name'],
-                'email' => 'guest+' . Str::random(12) . '@example.com',
-                'phone' => $validated['phone'],
-                'address' => $validated['address'],
+                'name'     => $validated['name'],
+                'email'    => isset($validated['email'])
+                    ? $validated['email']
+                    : 'guest+' . Str::random(12) . '@example.com',
+                'phone'    => $validated['phone'] ?? null,
+                'address'  => $validated['address'],
                 'password' => bcrypt(Str::random(16)),
             ]);
             $client->assignRole(Role::USER);
@@ -306,9 +314,13 @@ class OrderController extends Controller
             // Filtre par utilisateur
             // GET /api/admin/orders?user_id=5
 
+            ->when($request->from, fn($q, $from) => $q->whereDate('created_at', '>=', $from))
+            ->when($request->to,   fn($q, $to)   => $q->whereDate('created_at', '<=', $to))
+            ->when($request->search, fn($q, $s)  => $q->whereHas('user', fn($uq) => $uq->where('name', 'like', "%{$s}%")->orWhere('email', 'like', "%{$s}%")))
+
             ->latest()
-            ->paginate(20);
-        // 20 commandes par page pour l'admin
+            ->paginate($request->integer('per_page', 20));
+        // 20 commandes par page pour l'admin (ou per_page si fourni)
 
         return response()->json([
             'data' => OrderResource::collection($orders),
@@ -318,6 +330,21 @@ class OrderController extends Controller
                 'total'        => $orders->total(),
             ],
         ]);
+    }
+
+    public function downloadReceipt(Request $request, Order $order): \Illuminate\Http\Response
+    {
+        // Authorization: admin can download any, user only their own
+        $currentUser = auth('sanctum')->user();
+        if (!$currentUser) abort(401);
+        if ($currentUser->id !== $order->user_id && !$currentUser->isAdmin()) abort(403);
+
+        $order->load('items.product', 'user');
+
+        $pdf = \Barryvdh\DomPDF\Facade\Pdf::loadView('receipts.order', ['order' => $order]);
+        $pdf->setPaper('A4', 'portrait');
+
+        return $pdf->download("recu-commande-{$order->id}.pdf");
     }
 
     public function updateStatus(Request $request, Order $order): JsonResponse
