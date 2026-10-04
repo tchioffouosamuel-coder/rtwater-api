@@ -11,6 +11,7 @@ class OrderResource extends JsonResource
     {
         return [
             'id'         => $this->id,
+            'reference'  => $this->reference,
             'total'      => (float) $this->total,
             'status'     => $this->status,
             'address'    => $this->address,

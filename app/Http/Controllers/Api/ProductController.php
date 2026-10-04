@@ -7,6 +7,7 @@ use App\Http\Requests\Product\StoreProductRequest;
 use App\Http\Requests\Product\UpdateProductRequest;
 use App\Http\Resources\ProductResource;
 use App\Models\Product;
+use App\Support\ImageOptimizer;
 use Illuminate\Http\Request;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Support\Facades\Storage;
@@ -15,7 +16,9 @@ class ProductController extends Controller
 {
     public function index(Request $request): JsonResponse
     {
-        $products = Product::query()
+        $perPage = min((int) ($request->per_page ?? 12), 48);
+
+        $query = Product::query()
             ->with('category')
             ->withAvg('reviews as reviews_avg_rating', 'rating')
             ->withCount('reviews')
@@ -23,8 +26,16 @@ class ProductController extends Controller
             ->when($request->category_id, fn($q, $v) => $q->where('category_id', $v))
             ->when($request->search, fn($q, $v) => $q->where('name', 'like', "%$v%"))
             ->when($request->min_price, fn($q, $v) => $q->where('price', '>=', $v))
-            ->when($request->max_price, fn($q, $v) => $q->where('price', '<=', $v))
-            ->paginate(12);
+            ->when($request->max_price, fn($q, $v) => $q->where('price', '<=', $v));
+
+        match ($request->sort ?? 'newest') {
+            'price-low'  => $query->orderBy('price', 'asc'),
+            'price-high' => $query->orderBy('price', 'desc'),
+            'rating'     => $query->orderByDesc('reviews_avg_rating'),
+            default      => $query->latest(),
+        };
+
+        $products = $query->paginate($perPage);
 
         return response()->json([
             'data'       => ProductResource::collection($products),
@@ -45,8 +56,7 @@ class ProductController extends Controller
         // Plus sûr que $request->all() qui retourne TOUT
 
         if ($request->hasFile('image_url')) {
-            $validated['image_url'] = $request->file('image_url')
-                ->store('products', 'public');
+            $validated['image_url'] = ImageOptimizer::store($request->file('image_url'), 'products');
             // Sauvegarde l'image et stocke le chemin dans $validated
             // ex: "products/AbCdEf123456.jpg"
         }
@@ -83,8 +93,7 @@ class ProductController extends Controller
                 // Évite d'accumuler des fichiers inutilisés
             }
 
-            $validated['image_url'] = $request->file('image_url')
-                ->store('products', 'public');
+            $validated['image_url'] = ImageOptimizer::store($request->file('image_url'), 'products');
         }
 
         $product->update($validated);

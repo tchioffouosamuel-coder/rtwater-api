@@ -24,7 +24,7 @@ class UpdateProductRequest extends FormRequest
             'min_quantity' => 'nullable|integer|min:0',
             'max_quantity' => 'nullable|integer|min:0',
             'location'     => 'nullable|string|max:255',
-            'image_url'    => 'nullable|image|max:2048',
+            'image_url'    => 'nullable|image|max:8192',
             'is_available' => 'sometimes|boolean',
         ];
     }
@@ -37,7 +37,7 @@ class UpdateProductRequest extends FormRequest
             'price.min'          => 'Le prix ne peut pas être négatif',
             'stock.integer'      => 'Le stock doit être un nombre entier',
             'image_url.image'    => 'Le fichier doit être une image',
-            'image_url.max'      => 'L\'image ne doit pas dépasser 2 Mo',
+            'image_url.max'      => 'L\'image ne doit pas dépasser 8 Mo',
         ];
     }
 }

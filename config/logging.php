@@ -73,6 +73,14 @@ return [
             'replace_placeholders' => true,
         ],
 
+        // Erreurs JavaScript remontées par les navigateurs des visiteurs
+        'client' => [
+            'driver' => 'daily',
+            'path' => storage_path('logs/client.log'),
+            'level' => 'debug',
+            'days' => 30,
+        ],
+
         'slack' => [
             'driver' => 'slack',
             'url' => env('LOG_SLACK_WEBHOOK_URL'),

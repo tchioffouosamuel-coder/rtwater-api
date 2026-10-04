@@ -110,6 +110,8 @@ return [
     |
     */
 
+    // Destinataire des alertes internes (nouvelle commande, nouveau devis)
+    'admin_address' => env('MAIL_ADMIN_ADDRESS'),
     'from' => [
         'address' => env('MAIL_FROM_ADDRESS', 'hello@example.com'),
         'name' => env('MAIL_FROM_NAME', env('APP_NAME', 'Laravel')),

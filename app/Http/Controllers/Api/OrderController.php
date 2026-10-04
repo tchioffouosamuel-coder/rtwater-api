@@ -10,9 +10,14 @@ use App\Models\OrderItem;
 use App\Models\Product;
 use App\Models\Role;
 use App\Models\User;
+use App\Notifications\AdminAlertNotification;
+use App\Notifications\OrderPlacedNotification;
+use App\Notifications\OrderStatusChangedNotification;
+use App\Support\Notifier;
 use Illuminate\Http\Request;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\URL;
 use Illuminate\Support\Str;
 
 class OrderController extends Controller
@@ -261,10 +266,86 @@ class OrderController extends Controller
 
         $order->load('items.product', 'user');
 
+        Notifier::toUser($order->user, new OrderPlacedNotification($order));
+        Notifier::toAdmin(new AdminAlertNotification(
+            "Nouvelle commande {$order->reference}",
+            [
+                'Client : ' . $order->user->name . ($order->user->phone ? ' · ' . $order->user->phone : ''),
+                'Montant : ' . Notifier::money($order->total),
+                'Livraison : ' . $order->address,
+            ],
+            Notifier::frontendUrl('admin/orders'),
+        ));
+
         return response()->json([
             'message' => 'Commande créée avec succès',
             'data' => new OrderResource($order),
+            // Lien signé (24 h) : permet à un invité sans compte de suivre le paiement
+            'status_url' => URL::temporarySignedRoute('orders.status', now()->addDay(), ['order' => $order->id]),
         ], 201);
+    }
+
+    /**
+     * GET /api/orders/{order}/status?expires=…&signature=…
+     * Statut minimal d'une commande, via le lien signé renvoyé à la création.
+     */
+    public function status(Order $order): JsonResponse
+    {
+        return response()->json([
+            'data' => [
+                'id'        => $order->id,
+                'reference' => $order->reference,
+                'status'    => $order->status,
+            ],
+        ]);
+    }
+
+    /**
+     * GET /api/orders/track?reference=CMD-000042&contact=6XXXXXXXX
+     * Suivi public sans compte : la référence ET le téléphone (ou l'e-mail) doivent correspondre.
+     */
+    public function track(Request $request): JsonResponse
+    {
+        $validated = $request->validate([
+            'reference' => 'required|string|max:30',
+            'contact'   => 'required|string|max:255',
+        ]);
+
+        $id      = Order::idFromReference($validated['reference']);
+        $order   = $id ? Order::with('items.product', 'user', 'payment')->find($id) : null;
+        $contact = trim($validated['contact']);
+        $digits  = fn(?string $v) => substr(preg_replace('/\D/', '', (string) $v), -8);
+
+        $matches = $order && $order->user && (
+            strcasecmp($order->user->email, $contact) === 0
+            || ($order->user->phone && strlen($digits($contact)) === 8 && $digits($order->user->phone) === $digits($contact))
+        );
+
+        if (!$matches) {
+            return response()->json([
+                'message' => 'Aucune commande ne correspond à cette référence et ce contact.',
+            ], 404);
+        }
+
+        return response()->json([
+            'data' => [
+                'reference'  => $order->reference,
+                'status'     => $order->status,
+                'total'      => (float) $order->total,
+                'address'    => $order->address,
+                'created_at' => $order->created_at->format('d/m/Y à H:i'),
+                'updated_at' => $order->updated_at->format('d/m/Y à H:i'),
+                'payment'    => $order->payment ? [
+                    'operator' => $order->payment->operator,
+                    'status'   => $order->payment->status,
+                ] : null,
+                'items' => $order->items->map(fn($i) => [
+                    'name'     => $i->product->name ?? 'Article',
+                    'quantity' => $i->quantity,
+                    'price'    => (float) $i->price,
+                ]),
+            ],
+        ]);
     }
 
     public function show(Request $request, Order $order): JsonResponse
@@ -382,7 +463,20 @@ class OrderController extends Controller
             // Les transitions doivent suivre le cycle de vie logique
         }
 
-        $order->update(['status' => $newStatus]);
+        DB::transaction(function () use ($order, $newStatus) {
+            // Une commande annulée libère son stock
+            if ($newStatus === 'cancelled') {
+                foreach ($order->items()->get() as $item) {
+                    Product::whereKey($item->product_id)->increment('stock', $item->quantity);
+                }
+            }
+
+            $order->update(['status' => $newStatus]);
+        });
+
+        if (OrderStatusChangedNotification::supports($newStatus)) {
+            Notifier::toUser($order->user, new OrderStatusChangedNotification($order));
+        }
 
         return response()->json([
             'message' => 'Statut mis à jour : ' . $newStatus,

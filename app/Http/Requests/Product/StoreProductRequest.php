@@ -18,7 +18,7 @@ class StoreProductRequest extends FormRequest
     public function rules(): array
     {
         return [
-            'category_id'  => 'required|exists:categories,id',
+            'category_id'  => 'nullable|exists:categories,id',
             'name'         => 'required|string|max:255',
             'sku'          => 'nullable|string|max:100|unique:products,sku',
             'description'  => 'nullable|string',
@@ -28,7 +28,7 @@ class StoreProductRequest extends FormRequest
             'min_quantity' => 'nullable|integer|min:0',
             'max_quantity' => 'nullable|integer|min:0',
             'location'     => 'nullable|string|max:255',
-            'image_url'    => 'nullable|image|max:2048',
+            'image_url'    => 'nullable|image|max:8192',
             'is_available' => 'boolean',
         ];
     }
@@ -45,7 +45,7 @@ class StoreProductRequest extends FormRequest
             'stock.required'       => 'Le stock est obligatoire',
             'stock.integer'        => 'Le stock doit être un nombre entier',
             'image_url.image'      => 'Le fichier doit être une image',
-            'image_url.max'        => 'L\'image ne doit pas dépasser 2 Mo',
+            'image_url.max'        => 'L\'image ne doit pas dépasser 8 Mo',
         ];
     }
 }

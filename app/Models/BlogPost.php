@@ -8,6 +8,11 @@ use Illuminate\Database\Eloquent\Builder;
 
 class BlogPost extends Model
 {
+    protected static function booted(): void
+    {
+        \App\Support\CacheVersion::bustOnWrite(static::class, 'blog');
+    }
+
     use HasFactory;
 
     protected $fillable = [

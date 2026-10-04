@@ -8,6 +8,7 @@ use App\Http\Requests\Service\UpdateServiceRequest;
 use App\Http\Resources\ServiceResource;
 use App\Models\Service;
 use Illuminate\Http\JsonResponse;
+use App\Support\ImageOptimizer;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Storage;
 
@@ -49,8 +50,7 @@ class ServiceController extends Controller
         $validated = $request->validated();
 
         if ($request->hasFile('image_url')) {
-            $validated['image_url'] = $request->file('image_url')
-                ->store('services', 'public');
+            $validated['image_url'] = ImageOptimizer::store($request->file('image_url'), 'services');
         }
 
         $service = Service::create($validated);
@@ -70,8 +70,7 @@ class ServiceController extends Controller
             if ($service->image_url) {
                 Storage::disk('public')->delete($service->image_url);
             }
-            $validated['image_url'] = $request->file('image_url')
-                ->store('services', 'public');
+            $validated['image_url'] = ImageOptimizer::store($request->file('image_url'), 'services');
         }
 
         $service->update($validated);

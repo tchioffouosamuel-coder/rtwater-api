@@ -25,6 +25,24 @@ class Order extends Model
     }
 
     // ═══════════════════════════════
+    // RÉFÉRENCE LISIBLE
+    // ═══════════════════════════════
+
+    /** Référence affichée au client : CMD-000042 */
+    public function getReferenceAttribute(): string
+    {
+        return 'CMD-' . str_pad((string) $this->id, 6, '0', STR_PAD_LEFT);
+    }
+
+    /** CMD-000042, cmd-42, #42 ou 42 → 42 */
+    public static function idFromReference(string $reference): ?int
+    {
+        $digits = preg_replace('/\D/', '', $reference);
+
+        return $digits === '' ? null : (int) $digits;
+    }
+
+    // ═══════════════════════════════
     // RELATIONS
     // ═══════════════════════════════
 

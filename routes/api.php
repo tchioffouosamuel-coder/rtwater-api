@@ -7,6 +7,7 @@ use App\Http\Controllers\Api\PaymentController;
 use App\Http\Controllers\Api\BookingController;
 use App\Http\Controllers\Api\CartController;
 use App\Http\Controllers\Api\CategoryController;
+use App\Http\Controllers\Api\ClientErrorController;
 use App\Http\Controllers\Api\InvoiceController;
 use App\Http\Controllers\Api\OrderController;
 use App\Http\Controllers\Api\PageController;
@@ -22,8 +23,11 @@ use Illuminate\Support\Facades\Route;
 // ════════════════════════════════════════════════
 // AUTH — publiques
 // ════════════════════════════════════════════════
-Route::post('/login', [AuthController::class, 'login']);
-Route::post('/register', [AuthController::class, 'register']);
+// Limitation de débit : bloque le brute-force et le spam de comptes
+Route::post('/login', [AuthController::class, 'login'])->middleware('throttle:5,1');
+Route::post('/register', [AuthController::class, 'register'])->middleware('throttle:5,1');
+Route::post('/forgot-password', [AuthController::class, 'forgotPassword'])->middleware('throttle:3,1');
+Route::post('/reset-password', [AuthController::class, 'resetPassword'])->middleware('throttle:5,1');
 
 // ════════════════════════════════════════════════
 // PUBLIQUES — sans token
@@ -38,7 +42,15 @@ Route::get('/services/{service}', [ServiceController::class, 'show']);
 Route::get('/categories', [CategoryController::class, 'index']);
 Route::get('/categories/{category}', [CategoryController::class, 'show']);
 
-Route::post('/orders', [OrderController::class, 'store']);
+Route::post('/orders', [OrderController::class, 'store'])->middleware('throttle:10,1');
+
+// Suivi de commande sans compte (référence + téléphone ou e-mail)
+Route::get('/orders/track', [OrderController::class, 'track'])->middleware('throttle:10,1');
+
+// Statut via lien signé : utilisé par la fenêtre de paiement, y compris pour les invités
+Route::get('/orders/{order}/status', [OrderController::class, 'status'])
+    ->middleware(['signed', 'throttle:60,1'])
+    ->name('orders.status');
 
 // Blog & pages — publics
 Route::get('/blog', [BlogPostController::class, 'index']);
@@ -47,10 +59,13 @@ Route::get('/pages', [PageController::class, 'index']);
 Route::get('/pages/{slug}', [PageController::class, 'show']);
 
 // Formulaire de devis — public (soumis depuis le site vitrine)
-Route::post('/quotes', [QuoteRequestController::class, 'store']);
+Route::post('/quotes', [QuoteRequestController::class, 'store'])->middleware('throttle:5,1');
 
 // Paiement SEBPAY — public (la confirmation USSD est auto-authentifiante)
-Route::post('/orders/{order}/pay', [PaymentController::class, 'initiate']);
+Route::post('/orders/{order}/pay', [PaymentController::class, 'initiate'])->middleware('throttle:10,1');
+
+// Erreurs JavaScript des visiteurs (journal storage/logs/client-*.log)
+Route::post('/client-errors', [ClientErrorController::class, 'store'])->middleware('throttle:20,1');
 
 // Webhook SEBPAY — public, vérifié par HMAC en interne
 Route::post('/webhooks/sebpay', [PaymentController::class, 'webhook']);
@@ -63,6 +78,9 @@ Route::middleware('auth:sanctum')->group(function () {
     // Auth
     Route::post('/logout', [AuthController::class, 'logout']);
     Route::get('/me', [AuthController::class, 'me']);
+    Route::put('/me', [AuthController::class, 'updateProfile']);
+    Route::put('/me/password', [AuthController::class, 'updatePassword'])->middleware('throttle:5,1');
+    Route::get('/me/quotes', [QuoteRequestController::class, 'mine']);
 
     // Panier
     Route::get('/cart', [CartController::class, 'index']);

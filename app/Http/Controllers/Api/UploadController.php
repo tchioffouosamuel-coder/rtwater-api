@@ -3,6 +3,7 @@
 namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
+use App\Support\ImageOptimizer;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Storage;
@@ -13,11 +14,11 @@ class UploadController extends Controller
     // Endpoint générique pour uploader une image
     {
         $request->validate([
-            'image'  => 'required|image|mimes:jpeg,png,jpg,webp|max:2048',
+            'image'  => 'required|image|mimes:jpeg,png,jpg,webp|max:8192',
             // required → obligatoire
             // image   → doit être une image
             // mimes   → formats acceptés : jpeg, png, jpg, webp
-            // max:2048 → taille max 2 Mo (2048 Ko)
+            // max:8192 → 8 Mo max (l'image est ensuite compressée en WebP)
 
             'folder' => 'required|in:products,services,categories',
             // Le dossier de destination
@@ -25,10 +26,8 @@ class UploadController extends Controller
             // Évite qu'on stocke des fichiers n'importe où
         ]);
 
-        $path = $request->file('image')->store(
-            $request->folder,
-            'public'
-        );
+        $path = ImageOptimizer::store($request->file('image'), $request->folder);
+        // Redimensionnée (1600 px max) et convertie en WebP : ~10× plus légère
         // ->store(dossier, disk)
         // dossier → sous-dossier dans storage/app/public/
         // 'public' → utilise le disk "public" configuré dans config/filesystems.php

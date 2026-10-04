@@ -4,6 +4,7 @@ namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
 use App\Models\Page;
+use App\Support\CacheVersion;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Str;
@@ -11,9 +12,22 @@ use Illuminate\Support\Str;
 class PageController extends Controller
 {
     // GET /api/pages — public (pages publiées uniquement)
-    public function index(): JsonResponse
+    public function index(Request $request): JsonResponse
     {
-        $pages = Page::published()->get(['id', 'title', 'slug', 'sort_order']);
+        // GET /api/pages?slugs=accueil,contact : contenu complet de plusieurs pages
+        // en une seule requête (le site charge 6 blocs CMS à chaque visite)
+        if ($request->filled('slugs')) {
+            $slugs = collect(explode(',', (string) $request->slugs))
+                ->map(fn($s) => trim($s))->filter()->unique()->take(20)->sort()->values();
+
+            $data = CacheVersion::remember('pages', ['batch', $slugs->implode(',')], 3600,
+                fn() => Page::published()->whereIn('slug', $slugs)->get()->keyBy('slug')->toArray());
+
+            return response()->json(['data' => (object) $data]);
+        }
+
+        $pages = CacheVersion::remember('pages', ['index'], 3600,
+            fn() => Page::published()->get(['id', 'title', 'slug', 'sort_order'])->toArray());
 
         return response()->json(['data' => $pages]);
     }
@@ -21,7 +35,10 @@ class PageController extends Controller
     // GET /api/pages/{slug} — public
     public function show(string $slug): JsonResponse
     {
-        $page = Page::where('slug', $slug)->where('is_published', true)->firstOrFail();
+        $page = CacheVersion::remember('pages', ['show', $slug], 3600,
+            fn() => Page::where('slug', $slug)->where('is_published', true)->first()?->toArray());
+
+        abort_if(!$page, 404, 'Ressource introuvable');
 
         return response()->json(['data' => $page]);
     }

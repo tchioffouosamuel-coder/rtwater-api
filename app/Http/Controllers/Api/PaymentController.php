@@ -5,7 +5,10 @@ namespace App\Http\Controllers\Api;
 use App\Http\Controllers\Controller;
 use App\Models\Order;
 use App\Models\Payment;
+use App\Notifications\AdminAlertNotification;
+use App\Notifications\OrderStatusChangedNotification;
 use App\Services\SebpayService;
+use App\Support\Notifier;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
@@ -43,7 +46,7 @@ class PaymentController extends Controller
 
         try {
             $result = $this->sebpay->initiatePayment([
-                'amount'   => $order->total_price,
+                'amount'   => $order->total,
                 'operator' => $request->operator,
                 'phone'    => $request->phone,
             ]);
@@ -57,7 +60,7 @@ class PaymentController extends Controller
                     'sebpay_transaction_id' => $result['transaction_id'] ?? null,
                     'operator'              => $request->operator,
                     'phone'                 => $request->phone,
-                    'amount'                => $order->total_price,
+                    'amount'                => $order->total,
                     'currency'              => config('services.sebpay.currency', 'XOF'),
                     'status'                => $result['status'] ?? 'pending',
                     'sebpay_response'       => $result,
@@ -68,6 +71,7 @@ class PaymentController extends Controller
             if (($result['status'] ?? '') === 'success') {
                 $order->update(['status' => 'paid']);
                 $payment->update(['status' => 'success', 'confirmed_at' => now()]);
+                $this->notifyPaid($order);
             }
 
             return response()->json([
@@ -135,7 +139,13 @@ class PaymentController extends Controller
             ]);
 
             if ($sebpayStatus === 'success') {
+                // Idempotent : un webhook rejoué ne renvoie pas d'e-mail
+                $wasPending = $payment->order->status === 'pending';
                 $payment->order->update(['status' => 'paid']);
+
+                if ($wasPending) {
+                    DB::afterCommit(fn() => $this->notifyPaid($payment->order));
+                }
             } elseif (in_array($sebpayStatus, ['failed', 'cancelled'])) {
                 // Reset order to pending so user can retry
                 $payment->order->update(['status' => 'pending']);
@@ -143,5 +153,17 @@ class PaymentController extends Controller
         });
 
         return response()->json(['message' => 'OK']);
+    }
+
+    private function notifyPaid(Order $order): void
+    {
+        $order->loadMissing('user');
+
+        Notifier::toUser($order->user, new OrderStatusChangedNotification($order));
+        Notifier::toAdmin(new AdminAlertNotification(
+            "Paiement reçu pour {$order->reference}",
+            ['Montant : ' . Notifier::money($order->total), 'Client : ' . ($order->user->name ?? '-')],
+            Notifier::frontendUrl('admin/orders'),
+        ));
     }
 }

@@ -5,6 +5,7 @@ namespace App\Http\Controllers\Api;
 use App\Http\Controllers\Controller;
 use App\Http\Resources\CategoryResource;
 use App\Models\Category;
+use App\Support\CacheVersion;
 use Illuminate\Http\Request;
 use Illuminate\Http\JsonResponse;
 
@@ -12,7 +13,16 @@ class CategoryController extends Controller
 {
     public function index(Request $request): JsonResponse
     {
-        $categories = Category::query()
+        // Cache 1 h, invalidé dès qu'une catégorie ou un produit change
+        $data = CacheVersion::remember('categories', ['index', (string) $request->type], 3600,
+            fn() => CategoryResource::collection($this->queryCategories($request))->resolve());
+
+        return response()->json(['data' => $data]);
+    }
+
+    private function queryCategories(Request $request)
+    {
+        return Category::query()
             // query() → démarre une requête Eloquent
             // Équivalent à Category:: mais plus explicite
             // On peut chaîner des méthodes dessus
@@ -41,10 +51,6 @@ class CategoryController extends Controller
 
             ->get();
         // Exécute la requête et retourne une Collection
-
-        return response()->json([
-            'data' => CategoryResource::collection($categories),
-        ]);
     }
 
     public function store(Request $request): JsonResponse

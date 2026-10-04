@@ -4,6 +4,9 @@ namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
 use App\Models\QuoteRequest;
+use App\Notifications\AdminAlertNotification;
+use App\Notifications\QuoteReceivedNotification;
+use App\Support\Notifier;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 
@@ -25,10 +28,42 @@ class QuoteRequestController extends Controller
 
         $quote = QuoteRequest::create($validated);
 
+        Notifier::toEmail($quote->email, new QuoteReceivedNotification($quote));
+        Notifier::toAdmin(new AdminAlertNotification(
+            'Nouvelle demande de devis : ' . $quote->name,
+            array_filter([
+                'Contact : ' . $quote->email . ($quote->phone ? ' · ' . $quote->phone : ''),
+                $quote->company ? 'Société : ' . $quote->company : null,
+                $quote->solution_type ? 'Solution : ' . $quote->solution_type : null,
+                $quote->location ? 'Localisation : ' . $quote->location : null,
+                $quote->description ? 'Besoin : ' . $quote->description : null,
+            ]),
+            Notifier::frontendUrl('admin/quotes'),
+        ));
+
         return response()->json([
             'message' => 'Demande de devis reçue. Nous vous contacterons dans les plus brefs délais.',
             'data'    => ['id' => $quote->id],
         ], 201);
+    }
+
+    // GET /api/me/quotes — devis du client connecté (rattachés par e-mail)
+    public function mine(Request $request): JsonResponse
+    {
+        $quotes = QuoteRequest::where('email', $request->user()->email)
+            ->latest()
+            ->get(['id', 'solution_type', 'location', 'volume_m3', 'status', 'created_at']);
+
+        return response()->json([
+            'data' => $quotes->map(fn($q) => [
+                'id'            => $q->id,
+                'solution_type' => $q->solution_type,
+                'location'      => $q->location,
+                'volume_m3'     => $q->volume_m3,
+                'status'        => $q->status,
+                'created_at'    => $q->created_at->format('d/m/Y'),
+            ]),
+        ]);
     }
 
     // GET /api/admin/quotes — admin

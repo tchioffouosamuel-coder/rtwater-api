@@ -4,6 +4,7 @@ namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
 use App\Models\BlogPost;
+use App\Support\CacheVersion;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Str;
@@ -13,6 +14,15 @@ class BlogPostController extends Controller
     // GET /api/blog — public
     public function index(Request $request): JsonResponse
     {
+        // 10 min : un article programmé apparaît au plus 10 min après sa date
+        $payload = CacheVersion::remember('blog', ['index', (string) $request->search, (string) $request->integer('page', 1)], 600,
+            fn() => $this->listPublished($request));
+
+        return response()->json($payload);
+    }
+
+    private function listPublished(Request $request): array
+    {
         $posts = BlogPost::published()
             ->select('id', 'title', 'slug', 'excerpt', 'cover_image', 'tags', 'published_at', 'author_id')
             ->with('author:id,name')
@@ -20,20 +30,23 @@ class BlogPostController extends Controller
             ->latest('published_at')
             ->paginate(12);
 
-        return response()->json([
-            'data'       => $posts->items(),
+        return [
+            'data'       => collect($posts->items())->map->toArray()->all(),
             'pagination' => [
                 'current_page' => $posts->currentPage(),
                 'last_page'    => $posts->lastPage(),
                 'total'        => $posts->total(),
             ],
-        ]);
+        ];
     }
 
     // GET /api/blog/{slug} — public
     public function show(string $slug): JsonResponse
     {
-        $post = BlogPost::where('slug', $slug)->published()->with('author:id,name')->firstOrFail();
+        $post = CacheVersion::remember('blog', ['show', $slug], 600,
+            fn() => BlogPost::where('slug', $slug)->published()->with('author:id,name')->first()?->toArray());
+
+        abort_if(!$post, 404);
 
         return response()->json(['data' => $post]);
     }

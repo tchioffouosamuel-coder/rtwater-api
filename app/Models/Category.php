@@ -7,6 +7,11 @@ use Illuminate\Database\Eloquent\Factories\HasFactory;
 
 class Category extends Model
 {
+    protected static function booted(): void
+    {
+        \App\Support\CacheVersion::bustOnWrite(static::class, 'categories');
+    }
+
     use HasFactory;
     protected $fillable = [
         'name',

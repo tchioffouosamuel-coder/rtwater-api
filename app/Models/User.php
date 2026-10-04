@@ -113,6 +113,8 @@ class User extends Authenticatable
 
         if ($role && !$this->hasRole($roleName)) {
             $this->roles()->attach($role->id);
+            $this->unsetRelation('roles');
+            // Les rôles déjà chargés en mémoire sont périmés : on force un rechargement
             // attach() → insère une ligne dans la table pivot role_user
             // INSERT INTO role_user (user_id, role_id) VALUES (1, 2)
             //
@@ -130,6 +132,7 @@ class User extends Authenticatable
 
         if ($role) {
             $this->roles()->detach($role->id);
+            $this->unsetRelation('roles');
             // detach() → supprime la ligne dans la table pivot
             // DELETE FROM role_user WHERE user_id = 1 AND role_id = 2
         }

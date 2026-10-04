@@ -39,6 +39,17 @@ class Product extends Model
         ];
     }
 
+    protected static function booted(): void
+    {
+        // Le sitemap liste les produits : on le régénère dès qu'un produit change
+        $forget = function () {
+            \Illuminate\Support\Facades\Cache::forget('sitemap.xml');
+            \App\Support\CacheVersion::bump('categories');
+        };
+        static::saved($forget);
+        static::deleted($forget);
+    }
+
     // ═══════════════════════════════
     // RELATIONS
     // ═══════════════════════════════
