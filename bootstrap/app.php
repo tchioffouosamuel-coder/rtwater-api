@@ -62,9 +62,12 @@ return Application::configure(basePath: dirname(__DIR__))
         // au lieu des tokens Bearer → cause de tous nos problèmes
 
         $middleware->alias([
-            'verified' => \App\Http\Middleware\EnsureEmailIsVerified::class,
-            'role'     => \App\Http\Middleware\CheckRole::class,
-            // On fusionne les deux alias en un seul appel
+            'verified'   => \App\Http\Middleware\EnsureEmailIsVerified::class,
+            'role'       => \App\Http\Middleware\CheckRole::class,
+            // 'permission' filtre sur une capacite precise plutot que sur un nom
+            // de role : c'est lui qui rend les roles gestionnaire/secretaire/
+            // comptable reellement utilisables dans le backoffice.
+            'permission' => \App\Http\Middleware\CheckPermission::class,
         ]);
     })
     ->withExceptions(function (Exceptions $exceptions): void {

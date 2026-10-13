@@ -7,6 +7,7 @@ use App\Http\Requests\Product\StoreProductRequest;
 use App\Http\Requests\Product\UpdateProductRequest;
 use App\Http\Resources\ProductResource;
 use App\Models\Product;
+use App\Models\Setting;
 use App\Support\ImageOptimizer;
 use Illuminate\Http\Request;
 use Illuminate\Http\JsonResponse;
@@ -16,7 +17,10 @@ class ProductController extends Controller
 {
     public function index(Request $request): JsonResponse
     {
-        $perPage = min((int) ($request->per_page ?? 12), 48);
+        // Le nombre de produits par page vient des reglages de la boutique,
+        // la requete peut seulement le restreindre.
+        $default = (int) Setting::get('products_per_page', 12);
+        $perPage = min((int) ($request->per_page ?? $default), 48);
 
         $query = Product::query()
             ->with('category')
@@ -24,14 +28,26 @@ class ProductController extends Controller
             ->withCount('reviews')
             ->active()
             ->when($request->category_id, fn($q, $v) => $q->where('category_id', $v))
-            ->when($request->search, fn($q, $v) => $q->where('name', 'like', "%$v%"))
+            ->when($request->search, function ($q, $term) {
+                // La recherche couvre le nom, la reference et la description :
+                // chercher « RTW-B15 » ou un mot de la fiche doit fonctionner.
+                $q->where(function ($inner) use ($term) {
+                    $inner->where('name', 'like', "%$term%")
+                        ->orWhere('sku', 'like', "%$term%")
+                        ->orWhere('description', 'like', "%$term%");
+                });
+            })
             ->when($request->min_price, fn($q, $v) => $q->where('price', '>=', $v))
-            ->when($request->max_price, fn($q, $v) => $q->where('price', '<=', $v));
+            ->when($request->max_price, fn($q, $v) => $q->where('price', '<=', $v))
+            ->when($request->boolean('in_stock'), fn($q) => $q->where('stock', '>', 0))
+            ->when($request->boolean('on_sale'), fn($q) => $q->onSale());
 
         match ($request->sort ?? 'newest') {
             'price-low'  => $query->orderBy('price', 'asc'),
             'price-high' => $query->orderBy('price', 'desc'),
             'rating'     => $query->orderByDesc('reviews_avg_rating'),
+            'discount'   => $query->orderByDesc('discount'),
+            'name'       => $query->orderBy('name'),
             default      => $query->latest(),
         };
 

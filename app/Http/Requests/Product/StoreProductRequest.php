@@ -24,6 +24,8 @@ class StoreProductRequest extends FormRequest
             'description'  => 'nullable|string',
             'price'        => 'required|numeric|min:0',
             'cost'         => 'nullable|numeric|min:0',
+            'discount'     => 'nullable|integer|min:0|max:100',
+            'discount_ends_at' => 'nullable|date',
             'stock'        => 'required|integer|min:0',
             'min_quantity' => 'nullable|integer|min:0',
             'max_quantity' => 'nullable|integer|min:0',

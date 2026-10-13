@@ -20,6 +20,8 @@ class UpdateProductRequest extends FormRequest
             'description'  => 'nullable|string',
             'price'        => 'sometimes|numeric|min:0',
             'cost'         => 'nullable|numeric|min:0',
+            'discount'     => 'nullable|integer|min:0|max:100',
+            'discount_ends_at' => 'nullable|date',
             'stock'        => 'sometimes|integer|min:0',
             'min_quantity' => 'nullable|integer|min:0',
             'max_quantity' => 'nullable|integer|min:0',

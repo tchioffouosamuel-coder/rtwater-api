@@ -17,6 +17,7 @@ class CategoryResource extends JsonResource
             // 'product' ou 'service'
 
             'products_count' => $this->whenCounted('products'),
+            'services_count' => $this->whenCounted('services'),
             // whenCounted() → inclus le comptage SEULEMENT
             // si on a utilisé withCount('products') dans la requête
             //

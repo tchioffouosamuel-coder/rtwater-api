@@ -57,12 +57,17 @@ class CategoryController extends Controller
     {
         $validated = $request->validate([
             'name' => 'required|string|max:255',
-            'slug' => 'required|string|unique:categories,slug|max:255',
+            // Le slug est optionnel : derive du nom quand l'admin ne le saisit
+            // pas, ce qui est le cas depuis le backoffice.
+            'slug' => 'nullable|string|unique:categories,slug|max:255',
             'type' => 'required|in:product,service',
-            // in:product,service → la valeur doit être
-            // exactement 'product' ou 'service'
-            // Toute autre valeur → erreur de validation
+        ], [
+            'name.required' => 'Le nom de la catégorie est obligatoire.',
+            'slug.unique'   => 'Une catégorie utilise déjà cette adresse.',
+            'type.required' => "Précisez s'il s'agit d'une catégorie de produits ou de services.",
         ]);
+
+        $validated['slug'] = $this->uniqueSlug($validated['slug'] ?? $validated['name']);
 
         $category = Category::create($validated);
 
@@ -97,6 +102,10 @@ class CategoryController extends Controller
             'type' => 'sometimes|in:product,service',
         ]);
 
+        if (isset($validated['slug'])) {
+            $validated['slug'] = $this->uniqueSlug($validated['slug'], $category->id);
+        }
+
         $category->update($validated);
 
         return response()->json([
@@ -107,10 +116,50 @@ class CategoryController extends Controller
 
     public function destroy(Category $category): JsonResponse
     {
+        // Supprimer une categorie supprimerait ses produits en cascade :
+        // on refuse tant qu'elle est utilisee, et on dit par quoi.
+        $products = $category->products()->count();
+        $services = $category->services()->count();
+
+        if ($products > 0 || $services > 0) {
+            $parts = [];
+            if ($products > 0) {
+                $parts[] = "$products produit" . ($products > 1 ? 's' : '');
+            }
+            if ($services > 0) {
+                $parts[] = "$services service" . ($services > 1 ? 's' : '');
+            }
+
+            return response()->json([
+                'message' => 'Cette catégorie contient ' . implode(' et ', $parts)
+                    . '. Déplacez-les avant de la supprimer.',
+            ], 422);
+        }
+
         $category->delete();
 
         return response()->json([
             'message' => 'Catégorie supprimée avec succès',
         ]);
+    }
+
+    /** Slug lisible et unique, derive du nom si besoin. */
+    private function uniqueSlug(string $source, ?int $ignoreId = null): string
+    {
+        $base = \Illuminate\Support\Str::slug($source) ?: \Illuminate\Support\Str::random(8);
+        $slug = $base;
+
+        for ($i = 2; $i < 100; $i++) {
+            $exists = Category::where('slug', $slug)
+                ->when($ignoreId, fn($q) => $q->whereNot('id', $ignoreId))
+                ->exists();
+
+            if (!$exists) {
+                return $slug;
+            }
+            $slug = "$base-$i";
+        }
+
+        return $base . '-' . \Illuminate\Support\Str::random(5);
     }
 }

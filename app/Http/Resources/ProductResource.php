@@ -2,6 +2,7 @@
 
 namespace App\Http\Resources;
 
+use App\Support\OrderPricing;
 use Illuminate\Http\Request;
 use Illuminate\Http\Resources\Json\JsonResource;
 
@@ -13,7 +14,14 @@ class ProductResource extends JsonResource
             'id'           => $this->id,
             'name'         => $this->name,
             'description'  => $this->description,
+            'sku'          => $this->sku,
             'price'        => (float) $this->price,
+
+            // Remise effective : une promotion expiree ne doit plus s'afficher
+            'discount'     => $this->activeDiscount(),
+            'final_price'  => OrderPricing::unitPrice($this->resource),
+            'discount_ends_at' => $this->discount_ends_at?->toIso8601String(),
+
             'stock'        => $this->stock,
             'is_available' => $this->is_available,
 

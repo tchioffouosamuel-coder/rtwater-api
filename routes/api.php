@@ -7,14 +7,20 @@ use App\Http\Controllers\Api\PaymentController;
 use App\Http\Controllers\Api\BookingController;
 use App\Http\Controllers\Api\CartController;
 use App\Http\Controllers\Api\CategoryController;
+use App\Http\Controllers\Api\CustomerController;
 use App\Http\Controllers\Api\ClientErrorController;
+use App\Http\Controllers\Api\DiscountController;
 use App\Http\Controllers\Api\InvoiceController;
+use App\Http\Controllers\Api\NewsletterController;
 use App\Http\Controllers\Api\OrderController;
 use App\Http\Controllers\Api\PageController;
 use App\Http\Controllers\Api\ProductController;
+use App\Http\Controllers\Api\ProductImportController;
 use App\Http\Controllers\Api\QuoteRequestController;
 use App\Http\Controllers\Api\RoleController;
 use App\Http\Controllers\Api\ServiceController;
+use App\Http\Controllers\Api\SettingController;
+use App\Http\Controllers\Api\ShippingZoneController;
 use App\Http\Controllers\Api\StockMovementController;
 use App\Http\Controllers\Api\ReviewController;
 use App\Http\Controllers\Api\UploadController;
@@ -41,6 +47,20 @@ Route::get('/services/{service}', [ServiceController::class, 'show']);
 
 Route::get('/categories', [CategoryController::class, 'index']);
 Route::get('/categories/{category}', [CategoryController::class, 'show']);
+
+// Reglages publics : coordonnees, devise, moyens de paiement actifs
+Route::get('/settings', [SettingController::class, 'publicIndex']);
+
+// Zones de livraison et leur tarif pour un panier donne
+Route::get('/shipping-zones', [ShippingZoneController::class, 'publicIndex']);
+
+// Verification d'un code promo, et apercu du total avant validation
+Route::post('/discounts/check', [DiscountController::class, 'check'])->middleware('throttle:20,1');
+Route::post('/orders/quote', [OrderController::class, 'quote'])->middleware('throttle:60,1');
+
+// Lettre d'information — depuis le pied de page du site
+Route::post('/newsletter', [NewsletterController::class, 'subscribe'])->middleware('throttle:5,1');
+Route::delete('/newsletter', [NewsletterController::class, 'unsubscribe'])->middleware('throttle:5,1');
 
 Route::post('/orders', [OrderController::class, 'store'])->middleware('throttle:10,1');
 
@@ -104,75 +124,136 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::delete('/bookings/{booking}', [BookingController::class, 'destroy']);
 
     // ════════════════════════════════════════════════
-    // ADMIN — rôle admin requis
+    // BACKOFFICE — filtré par permission, pas par nom de rôle
+    //
+    // Chaque route déclare la capacité qu'elle exige (voir App\Support\Permissions).
+    // C'est ce qui rend les rôles gestionnaire / secrétaire / comptable réellement
+    // utilisables : avant, tout le backoffice était derrière « role:admin » et ces
+    // rôles existaient uniquement dans l'interface React.
     // ════════════════════════════════════════════════
-    Route::middleware('role:admin')->group(function () {
 
-        // Rôles
+    // Comptes de l'équipe et rôles — administrateur seulement
+    Route::middleware('permission:manage_users')->group(function () {
         Route::apiResource('roles', RoleController::class);
+    });
 
-        // Catégories (écriture)
+    // ── Catalogue ──────────────────────────────────
+    Route::middleware('permission:manage_categories')->group(function () {
         Route::post('/categories', [CategoryController::class, 'store']);
         Route::put('/categories/{category}', [CategoryController::class, 'update']);
         Route::delete('/categories/{category}', [CategoryController::class, 'destroy']);
+    });
 
-        // Produits (écriture)
+    Route::middleware('permission:manage_products')->group(function () {
         Route::post('/products', [ProductController::class, 'store']);
         Route::put('/products/{product}', [ProductController::class, 'update']);
         Route::delete('/products/{product}', [ProductController::class, 'destroy']);
 
-        // Services (écriture)
+        // Import massif de produits (Excel/CSV + images)
+        Route::get('/admin/products/import/template', [ProductImportController::class, 'template']);
+        Route::post('/admin/products/import/analyze', [ProductImportController::class, 'analyze'])->middleware('throttle:20,1');
+        Route::post('/admin/products/import/commit', [ProductImportController::class, 'commit'])->middleware('throttle:20,1');
+        Route::post('/admin/products/import/discard', [ProductImportController::class, 'discard']);
+        Route::get('/admin/products/imports', [ProductImportController::class, 'history']);
+    });
+
+    Route::middleware('permission:manage_services')->group(function () {
         Route::post('/services', [ServiceController::class, 'store']);
         Route::put('/services/{service}', [ServiceController::class, 'update']);
         Route::delete('/services/{service}', [ServiceController::class, 'destroy']);
+    });
 
-        // Upload images
+    // Upload d'images : commun au catalogue, aux pages et au blog
+    Route::middleware('permission:manage_products,manage_services,manage_pages,manage_blog')->group(function () {
         Route::post('/upload/image', [UploadController::class, 'uploadImage']);
         Route::delete('/upload/image', [UploadController::class, 'deleteImage']);
+    });
 
-        // Commandes admin
+    // ── Commandes & clients ────────────────────────
+    Route::middleware('permission:manage_orders')->group(function () {
         Route::get('/admin/orders', [OrderController::class, 'adminIndex']);
         Route::put('/admin/orders/{order}', [OrderController::class, 'updateStatus']);
-        Route::post('/admin/pos-order', [OrderController::class, 'posStore']);
         Route::get('/admin/orders/{order}/receipt', [OrderController::class, 'downloadReceipt']);
-
-        // Réservations admin
         Route::get('/admin/bookings', [BookingController::class, 'adminIndex']);
-
-        // Demandes de devis admin
         Route::get('/admin/quotes', [QuoteRequestController::class, 'index']);
         Route::get('/admin/quotes/{quoteRequest}', [QuoteRequestController::class, 'show']);
         Route::put('/admin/quotes/{quoteRequest}', [QuoteRequestController::class, 'update']);
+    });
 
-        // Blog admin
-        Route::get('/admin/blog', [BlogPostController::class, 'adminIndex']);
-        Route::post('/admin/blog', [BlogPostController::class, 'store']);
-        Route::put('/admin/blog/{blogPost}', [BlogPostController::class, 'update']);
-        Route::delete('/admin/blog/{blogPost}', [BlogPostController::class, 'destroy']);
+    Route::middleware('permission:manage_customers')->group(function () {
+        // L'export passe avant la route paramétrée, sinon « export » serait pris
+        // pour un identifiant de client.
+        Route::get('/admin/customers/export', [CustomerController::class, 'export']);
+        Route::get('/admin/customers', [CustomerController::class, 'index']);
+        Route::get('/admin/customers/{user}', [CustomerController::class, 'show']);
+    });
 
-        // Pages CMS admin
-        Route::get('/admin/pages', [PageController::class, 'adminIndex']);
-        Route::post('/admin/pages', [PageController::class, 'store']);
-        Route::put('/admin/pages/{page}', [PageController::class, 'update']);
-        Route::delete('/admin/pages/{page}', [PageController::class, 'destroy']);
+    // ── Caisse & stock ─────────────────────────────
+    Route::middleware('permission:manage_pos')->group(function () {
+        Route::post('/admin/pos-order', [OrderController::class, 'posStore']);
+    });
 
-        // Factures & devis
+    Route::middleware('permission:manage_inventory')->group(function () {
+        Route::get('/admin/stock-movements', [StockMovementController::class, 'index']);
+        Route::post('/admin/stock-movements', [StockMovementController::class, 'store']);
+    });
+
+    Route::middleware('permission:manage_receipts')->group(function () {
         Route::get('/admin/invoices', [InvoiceController::class, 'index']);
         Route::post('/admin/invoices', [InvoiceController::class, 'store']);
         Route::get('/admin/invoices/{invoice}', [InvoiceController::class, 'show']);
         Route::put('/admin/invoices/{invoice}', [InvoiceController::class, 'update']);
         Route::get('/admin/invoices/{invoice}/pdf', [InvoiceController::class, 'downloadPdf']);
+    });
 
-        // Mouvements de stock
-        Route::get('/admin/stock-movements', [StockMovementController::class, 'index']);
-        Route::post('/admin/stock-movements', [StockMovementController::class, 'store']);
+    // ── Contenu ────────────────────────────────────
+    Route::middleware('permission:manage_blog')->group(function () {
+        Route::get('/admin/blog', [BlogPostController::class, 'adminIndex']);
+        Route::post('/admin/blog', [BlogPostController::class, 'store']);
+        Route::put('/admin/blog/{blogPost}', [BlogPostController::class, 'update']);
+        Route::delete('/admin/blog/{blogPost}', [BlogPostController::class, 'destroy']);
+    });
 
-        // Avis produits — admin
+    Route::middleware('permission:manage_pages')->group(function () {
+        Route::get('/admin/pages', [PageController::class, 'adminIndex']);
+        Route::post('/admin/pages', [PageController::class, 'store']);
+        Route::put('/admin/pages/{page}', [PageController::class, 'update']);
+        Route::delete('/admin/pages/{page}', [PageController::class, 'destroy']);
+    });
+
+    Route::middleware('permission:manage_reviews')->group(function () {
         Route::get('/admin/reviews', [ReviewController::class, 'adminIndex']);
         Route::put('/admin/reviews/{review}', [ReviewController::class, 'adminUpdate']);
         Route::delete('/admin/reviews/{review}', [ReviewController::class, 'adminDestroy']);
+    });
 
-        // Analytics
+    // ── Commercial ─────────────────────────────────
+    Route::middleware('permission:manage_discounts')->group(function () {
+        Route::get('/admin/discounts', [DiscountController::class, 'index']);
+        Route::post('/admin/discounts', [DiscountController::class, 'store']);
+        Route::put('/admin/discounts/{discount}', [DiscountController::class, 'update']);
+        Route::delete('/admin/discounts/{discount}', [DiscountController::class, 'destroy']);
+    });
+
+    Route::middleware('permission:manage_shipping')->group(function () {
+        Route::get('/admin/shipping-zones', [ShippingZoneController::class, 'index']);
+        Route::post('/admin/shipping-zones', [ShippingZoneController::class, 'store']);
+        Route::put('/admin/shipping-zones/{shippingZone}', [ShippingZoneController::class, 'update']);
+        Route::delete('/admin/shipping-zones/{shippingZone}', [ShippingZoneController::class, 'destroy']);
+    });
+
+    Route::middleware('permission:manage_newsletter')->group(function () {
+        Route::get('/admin/newsletter/export', [NewsletterController::class, 'export']);
+        Route::get('/admin/newsletter', [NewsletterController::class, 'index']);
+    });
+
+    // ── Pilotage ───────────────────────────────────
+    Route::middleware('permission:view_analytics')->group(function () {
         Route::get('/admin/analytics', [AnalyticsController::class, 'index']);
+    });
+
+    Route::middleware('permission:manage_settings')->group(function () {
+        Route::get('/admin/settings', [SettingController::class, 'index']);
+        Route::put('/admin/settings', [SettingController::class, 'update']);
     });
 });

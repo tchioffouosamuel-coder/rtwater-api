@@ -21,7 +21,7 @@ class QuoteReceivedNotification extends Notification
         $mail = (new MailMessage)
             ->subject('Nous avons bien reçu votre demande de devis')
             ->greeting("Bonjour {$this->quote->name},")
-            ->line("Merci pour votre demande. Un technicien RT Water Solution l'étudie et vous recontacte sous 48 h ouvrées.");
+            ->line("Merci pour votre demande. Un technicien RT Water Solution l'étudie et vous recontacte sous 24 h.");
 
         if ($this->quote->solution_type) {
             $mail->line('Solution souhaitée : ' . $this->quote->solution_type);

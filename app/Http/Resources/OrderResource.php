@@ -10,11 +10,21 @@ class OrderResource extends JsonResource
     public function toArray(Request $request): array
     {
         return [
-            'id'         => $this->id,
-            'reference'  => $this->reference,
-            'total'      => (float) $this->total,
-            'status'     => $this->status,
-            'address'    => $this->address,
+            'id'             => $this->id,
+            'reference'      => $this->reference,
+            'subtotal'       => (float) $this->subtotal,
+            'shipping_fee'   => (float) $this->shipping_fee,
+            'discount_total' => (float) $this->discount_total,
+            'discount_code'  => $this->discount_code,
+            'total'          => (float) $this->total,
+            'status'         => $this->status,
+            'payment_method' => $this->payment_method,
+            'address'        => $this->address,
+            'admin_notes'    => $this->admin_notes,
+            'shipping_zone'  => $this->whenLoaded('shippingZone', fn() => [
+                'id'   => $this->shippingZone->id,
+                'name' => $this->shippingZone->name,
+            ]),
 
             'user'       => new UserResource($this->whenLoaded('user')),
             // L'utilisateur qui a passé la commande

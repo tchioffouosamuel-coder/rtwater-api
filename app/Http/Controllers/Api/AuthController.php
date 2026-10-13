@@ -7,6 +7,7 @@ use App\Http\Requests\Auth\LoginRequest;
 use App\Http\Requests\Auth\RegisterRequest;
 use App\Models\Role;
 use App\Models\User;
+use App\Support\Permissions;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
@@ -42,6 +43,10 @@ class AuthController extends Controller
                 'name'  => $user->name,
                 'email' => $user->email,
                 'roles' => $user->roles->pluck('name'),
+                // Les permissions viennent du serveur : le navigateur ne les
+                // deduit plus lui-meme, il ne peut donc plus s'en octroyer.
+                'permissions' => Permissions::forUser($user),
+                'is_staff'    => Permissions::isStaff($user),
             ],
         ], 201);
     }
@@ -57,6 +62,7 @@ class AuthController extends Controller
 
         /** @var \App\Models\User $user */
         $user = Auth::user();
+        $user->load('roles'); // les permissions se calculent a partir des roles
         $token = $user->createToken('api-token')->plainTextToken;
 
         return response()->json([
@@ -67,6 +73,10 @@ class AuthController extends Controller
                 'name'  => $user->name,
                 'email' => $user->email,
                 'roles' => $user->roles->pluck('name'),
+                // Les permissions viennent du serveur : le navigateur ne les
+                // deduit plus lui-meme, il ne peut donc plus s'en octroyer.
+                'permissions' => Permissions::forUser($user),
+                'is_staff'    => Permissions::isStaff($user),
             ],
         ]);
     }
@@ -186,6 +196,10 @@ class AuthController extends Controller
             'phone'      => $user->phone,
             'address'    => $user->address,
             'roles'      => $user->roles->pluck('name'),
+            // GET /me sert aussi a rehydrater le backoffice au rechargement :
+            // les permissions doivent y figurer comme a la connexion.
+            'permissions' => Permissions::forUser($user),
+            'is_staff'    => Permissions::isStaff($user),
             'created_at' => $user->created_at->format('d/m/Y'),
         ];
     }

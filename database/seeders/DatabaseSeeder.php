@@ -34,6 +34,13 @@ class DatabaseSeeder extends Seeder
 
             PageSeeder::class,
             // 7. Les pages CMS
+
+            // Pages legales : le pied de page y renvoie deja, sans elles les
+            // liens « Conditions generales » et « Confidentialite » tombent en 404
+            LegalPageSeeder::class,
+
+            // Zones de livraison de depart, a ajuster dans le backoffice
+            ShippingZoneSeeder::class,
         ]);
         // L'ordre est CRUCIAL :
         // Chaque seeder dépend de ceux qui le précèdent

@@ -11,35 +11,85 @@ class Order extends Model
 
     protected $fillable = [
         'user_id',
+        'reference',
+        'subtotal',
+        'shipping_fee',
+        'discount_total',
+        'discount_code',
+        'shipping_zone_id',
         'total',
         'status',
+        'payment_method',
         'address',
+        'admin_notes',
     ];
 
     protected function casts(): array
     {
         return [
-            'total' => 'decimal:2',
-            // Toujours 2 décimales pour le total
+            'subtotal'       => 'decimal:2',
+            'shipping_fee'   => 'decimal:2',
+            'discount_total' => 'decimal:2',
+            'total'          => 'decimal:2',
         ];
     }
 
-    // ═══════════════════════════════
-    // RÉFÉRENCE LISIBLE
-    // ═══════════════════════════════
-
-    /** Référence affichée au client : CMD-000042 */
-    public function getReferenceAttribute(): string
+    protected static function booted(): void
     {
-        return 'CMD-' . str_pad((string) $this->id, 6, '0', STR_PAD_LEFT);
+        // Toute commande part avec une référence, y compris celles créées en test
+        static::creating(function (self $order) {
+            $order->reference ??= self::nextReference();
+        });
     }
 
-    /** CMD-000042, cmd-42, #42 ou 42 → 42 */
-    public static function idFromReference(string $reference): ?int
+    // ═══════════════════════════════
+    // RÉFÉRENCE
+    // ═══════════════════════════════
+
+    /**
+     * Référence du type CMD-261013-K7M2Q.
+     *
+     * La partie aléatoire est délibérée : une référence dérivée de l'id rendait
+     * le nombre de commandes public et les références énumérables.
+     */
+    public static function nextReference(): string
     {
+        $alphabet = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'; // sans I, O, 0, 1 : illisibles au téléphone
+
+        for ($attempt = 0; $attempt < 10; $attempt++) {
+            $suffix = '';
+            for ($i = 0; $i < 5; $i++) {
+                $suffix .= $alphabet[random_int(0, strlen($alphabet) - 1)];
+            }
+
+            $reference = 'CMD-' . now()->format('ymd') . '-' . $suffix;
+
+            if (!static::where('reference', $reference)->exists()) {
+                return $reference;
+            }
+        }
+
+        // Collision 10 fois de suite : on retombe sur une valeur forcément unique
+        return 'CMD-' . now()->format('ymdHis') . '-' . strtoupper(bin2hex(random_bytes(3)));
+    }
+
+    /** Retrouve une commande à partir d'une référence saisie par le client. */
+    public static function findByReference(?string $reference): ?self
+    {
+        $reference = strtoupper(trim((string) $reference));
+        if ($reference === '') {
+            return null;
+        }
+
+        $order = static::where('reference', $reference)->first();
+        if ($order) {
+            return $order;
+        }
+
+        // Références historiques, dérivées de l'id (CMD-000042, #42, 42)
         $digits = preg_replace('/\D/', '', $reference);
 
-        return $digits === '' ? null : (int) $digits;
+        return $digits === '' ? null : static::find((int) $digits);
     }
 
     // ═══════════════════════════════
@@ -66,6 +116,11 @@ class Order extends Model
     public function payments()
     {
         return $this->hasMany(Payment::class);
+    }
+
+    public function shippingZone()
+    {
+        return $this->belongsTo(ShippingZone::class);
     }
 
     public function invoice()

@@ -16,6 +16,8 @@ class Product extends Model
         'description',
         'price',
         'cost',
+        'discount',
+        'discount_ends_at',
         'stock',
         'min_quantity',
         'max_quantity',
@@ -27,7 +29,9 @@ class Product extends Model
     protected function casts(): array
     {
         return [
-            'price'     => 'decimal:2',
+            'price'            => 'decimal:2',
+            'discount'         => 'integer',
+            'discount_ends_at' => 'datetime',
             // Garantit que price est toujours retourné avec 2 décimales
             // 999 → "999.00"  /  999.9 → "999.90"
 
@@ -88,6 +92,30 @@ class Product extends Model
     // ═══════════════════════════════
     // SCOPES — filtres réutilisables
     // ═══════════════════════════════
+
+    /** Remise en cours, 0 si absente ou expiree. */
+    public function activeDiscount(): int
+    {
+        $percent = (int) ($this->discount ?? 0);
+
+        if ($percent <= 0 || $percent > 100) {
+            return 0;
+        }
+        if ($this->discount_ends_at && $this->discount_ends_at->isPast()) {
+            return 0;
+        }
+
+        return $percent;
+    }
+
+    /** Produits reellement en promotion a cet instant. */
+    public function scopeOnSale(Builder $query)
+    {
+        return $query->where('discount', '>', 0)
+            ->where(function (Builder $q) {
+                $q->whereNull('discount_ends_at')->orWhere('discount_ends_at', '>', now());
+            });
+    }
 
     public function scopeActive(Builder $query)
     {

@@ -2,18 +2,23 @@
 
 namespace App\Http\Controllers\Api;
 
+use App\Exceptions\InsufficientStockException;
 use App\Http\Controllers\Controller;
 use App\Http\Resources\OrderResource;
 use App\Models\CartItem;
 use App\Models\Order;
 use App\Models\OrderItem;
+use App\Models\Discount;
 use App\Models\Product;
 use App\Models\Role;
+use App\Models\ShippingZone;
 use App\Models\User;
 use App\Notifications\AdminAlertNotification;
 use App\Notifications\OrderPlacedNotification;
 use App\Notifications\OrderStatusChangedNotification;
 use App\Support\Notifier;
+use App\Support\OrderPricing;
+use App\Support\StockReserver;
 use Illuminate\Http\Request;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Support\Facades\DB;
@@ -37,42 +42,49 @@ class OrderController extends Controller
         $lines    = collect($validated['items']);
         $products = Product::whereIn('id', $lines->pluck('product_id'))->get()->keyBy('id');
 
-        // Stock check
-        foreach ($lines as $item) {
-            $product = $products->get($item['product_id']);
-            if (!$product) {
-                return response()->json(['message' => 'Produit introuvable.'], 422);
-            }
-            if ($product->stock < $item['quantity']) {
-                return response()->json([
-                    'message' => "Stock insuffisant pour « {$product->name} ». Disponible : {$product->stock}",
-                ], 422);
-            }
+        if ($lines->contains(fn($item) => !$products->get($item['product_id']))) {
+            return response()->json(['message' => 'Produit introuvable.'], 422);
         }
 
-        $total = $lines->sum(fn($item) => $item['quantity'] * $products->get($item['product_id'])->price);
+        $orderLines = $lines->map(fn($item) => [
+            'product'  => $products->get($item['product_id']),
+            'quantity' => (int) $item['quantity'],
+        ]);
 
-        $order = DB::transaction(function () use ($request, $lines, $products, $total) {
-            $order = Order::create([
-                'user_id' => $request->user()->id,
-                'total'   => $total,
-                'status'  => 'paid',
-                'address' => 'Vente en caisse — Yaoundé',
-            ]);
+        // En caisse : pas de livraison ni de code promo, mais les remises
+        // produit s'appliquent comme en ligne.
+        $quote = OrderPricing::quote($orderLines);
 
-            foreach ($lines as $item) {
-                $product = $products->get($item['product_id']);
-                OrderItem::create([
-                    'order_id'   => $order->id,
-                    'product_id' => $product->id,
-                    'quantity'   => $item['quantity'],
-                    'price'      => $product->price,
+        try {
+            $order = DB::transaction(function () use ($request, $orderLines, $quote) {
+                // Le stock est relu sous verrou ICI, pas avant la transaction :
+                // sinon deux ventes simultanees sur le dernier article passent
+                // toutes les deux la verification.
+                StockReserver::reserve($orderLines);
+
+                $order = Order::create([
+                    'user_id'        => $request->user()->id,
+                    'subtotal'       => $quote['subtotal'],
+                    'total'          => $quote['total'],
+                    'status'         => 'paid',
+                    'payment_method' => 'cash',
+                    'address'        => 'Vente en caisse',
                 ]);
-                $product->decrement('stock', $item['quantity']);
-            }
 
-            return $order;
-        });
+                foreach ($orderLines as $line) {
+                    OrderItem::create([
+                        'order_id'   => $order->id,
+                        'product_id' => $line['product']->id,
+                        'quantity'   => $line['quantity'],
+                        'price'      => OrderPricing::unitPrice($line['product']),
+                    ]);
+                }
+
+                return $order;
+            });
+        } catch (InsufficientStockException $e) {
+            return response()->json(['message' => $e->getMessage()], 422);
+        }
 
         $order->load('items.product', 'user');
 
@@ -119,7 +131,10 @@ class OrderController extends Controller
         $user = auth('sanctum')->user();
 
         $rules = [
-            'address' => 'required|string|max:500',
+            'address'          => 'required|string|max:500',
+            'shipping_zone_id' => 'nullable|integer|exists:shipping_zones,id',
+            'discount_code'    => 'nullable|string|max:50',
+            'payment_method'   => 'nullable|in:mobile_money,cash',
         ];
 
         if ($user) {
@@ -173,21 +188,10 @@ class OrderController extends Controller
             });
         }
 
-        foreach ($orderLines as $line) {
-            if (!$line['product']) {
-                return response()->json([
-                    'message' => 'Produit introuvable dans la commande.',
-                ], 422);
-            }
-
-            if ($line['product']->stock < $line['quantity']) {
-                return response()->json([
-                    'message' => 'Stock insuffisant pour le produit : '
-                        . $line['product']->name
-                        . '. Stock disponible : '
-                        . $line['product']->stock,
-                ], 422);
-            }
+        if ($orderLines->contains(fn($line) => !$line['product'])) {
+            return response()->json([
+                'message' => 'Produit introuvable dans la commande.',
+            ], 422);
         }
 
         $client = $user;
@@ -234,35 +238,64 @@ class OrderController extends Controller
             }
         }
 
-        $total = $orderLines->sum(function ($line) {
-            return $line['quantity'] * $line['product']->price;
-        });
+        $zone = isset($validated['shipping_zone_id'])
+            ? ShippingZone::active()->find($validated['shipping_zone_id'])
+            : null;
 
-        $order = DB::transaction(function () use ($client, $orderLines, $total, $validated, $user) {
-            $order = Order::create([
-                'user_id' => $client->id,
-                'total' => $total,
-                'status' => 'pending',
-                'address' => $validated['address'],
-            ]);
+        // Les montants sont recalcules ici a partir de la base : ceux envoyes par
+        // le navigateur ne sont jamais repris, ils sont modifiables par le client.
+        $quote = OrderPricing::quote($orderLines, $zone, $validated['discount_code'] ?? null, $client);
 
-            foreach ($orderLines as $line) {
-                OrderItem::create([
-                    'order_id' => $order->id,
-                    'product_id' => $line['product']->id,
-                    'quantity' => $line['quantity'],
-                    'price' => $line['product']->price,
+        if ($quote['discount_error'] !== null) {
+            return response()->json([
+                'message' => $quote['discount_error'],
+                'errors'  => ['discount_code' => [$quote['discount_error']]],
+            ], 422);
+        }
+
+        try {
+            $order = DB::transaction(function () use ($client, $orderLines, $quote, $zone, $validated, $user) {
+                // Stock relu sous verrou dans la transaction : seul moyen d'empecher
+                // deux acheteurs simultanes de prendre le meme dernier article.
+                StockReserver::reserve($orderLines);
+
+                $order = Order::create([
+                    'user_id'          => $client->id,
+                    'subtotal'         => $quote['subtotal'],
+                    'shipping_fee'     => $quote['shipping_fee'],
+                    'discount_total'   => $quote['discount_total'],
+                    'discount_code'    => $quote['discount_code'],
+                    'shipping_zone_id' => $zone?->id,
+                    'total'            => $quote['total'],
+                    'status'           => 'pending',
+                    'payment_method'   => $validated['payment_method'] ?? null,
+                    'address'          => $validated['address'],
                 ]);
 
-                $line['product']->decrement('stock', $line['quantity']);
-            }
+                foreach ($orderLines as $line) {
+                    OrderItem::create([
+                        'order_id'   => $order->id,
+                        'product_id' => $line['product']->id,
+                        'quantity'   => $line['quantity'],
+                        'price'      => OrderPricing::unitPrice($line['product']),
+                    ]);
+                }
 
-            if ($user && $orderLines->first()['cart_id'] ?? false) {
-                $user->cartItems()->delete();
-            }
+                // Compteur d'utilisations du code promo, sous le meme verrou que
+                // la commande : c'est lui qui fait respecter max_uses.
+                if ($quote['discount_code'] !== null) {
+                    Discount::where('code', $quote['discount_code'])->lockForUpdate()->first()?->increment('used_count');
+                }
 
-            return $order;
-        });
+                if ($user && ($orderLines->first()['cart_id'] ?? false)) {
+                    $user->cartItems()->delete();
+                }
+
+                return $order;
+            });
+        } catch (InsufficientStockException $e) {
+            return response()->json(['message' => $e->getMessage()], 422);
+        }
 
         $order->load('items.product', 'user');
 
@@ -283,6 +316,65 @@ class OrderController extends Controller
             // Lien signé (24 h) : permet à un invité sans compte de suivre le paiement
             'status_url' => URL::temporarySignedRoute('orders.status', now()->addDay(), ['order' => $order->id]),
         ], 201);
+    }
+
+    /**
+     * POST /api/orders/quote — public.
+     * Recalcule le detail d'un panier (remises produit, livraison, code promo)
+     * pour l'afficher avant validation. Ne cree rien et n'engage rien.
+     */
+    public function quote(Request $request): JsonResponse
+    {
+        $validated = $request->validate([
+            'items'              => 'required|array|min:1|max:100',
+            'items.*.product_id' => 'required|integer|exists:products,id',
+            'items.*.quantity'   => 'required|integer|min:1|max:1000',
+            'shipping_zone_id'   => 'nullable|integer|exists:shipping_zones,id',
+            'discount_code'      => 'nullable|string|max:50',
+        ]);
+
+        $products = Product::whereIn('id', collect($validated['items'])->pluck('product_id'))
+            ->get()
+            ->keyBy('id');
+
+        $lines = collect($validated['items'])
+            ->filter(fn($item) => $products->has($item['product_id']))
+            ->map(fn($item) => [
+                'product'  => $products->get($item['product_id']),
+                'quantity' => (int) $item['quantity'],
+            ]);
+
+        if ($lines->isEmpty()) {
+            return response()->json(['message' => 'Aucun produit valide dans le panier.'], 422);
+        }
+
+        $zone = isset($validated['shipping_zone_id'])
+            ? ShippingZone::active()->find($validated['shipping_zone_id'])
+            : null;
+
+        $quote = OrderPricing::quote($lines, $zone, $validated['discount_code'] ?? null, auth('sanctum')->user());
+
+        return response()->json([
+            'data' => [
+                'subtotal'       => $quote['subtotal'],
+                'shipping_fee'   => $quote['shipping_fee'],
+                'discount_total' => $quote['discount_total'],
+                'discount_code'  => $quote['discount_code'],
+                'total'          => $quote['total'],
+                // Le code refuse n'est pas une erreur de requete : le panier reste
+                // valide, on affiche simplement pourquoi le code ne s'applique pas.
+                'discount_error' => $quote['discount_error'],
+                'shipping_zone'  => $zone ? ['id' => $zone->id, 'name' => $zone->name] : null,
+                'lines'          => $lines->map(fn($l) => [
+                    'product_id' => $l['product']->id,
+                    'name'       => $l['product']->name,
+                    'quantity'   => $l['quantity'],
+                    'unit_price' => OrderPricing::unitPrice($l['product']),
+                    'base_price' => (float) $l['product']->price,
+                    'discount'   => $l['product']->activeDiscount(),
+                ])->values(),
+            ],
+        ]);
     }
 
     /**
@@ -311,8 +403,8 @@ class OrderController extends Controller
             'contact'   => 'required|string|max:255',
         ]);
 
-        $id      = Order::idFromReference($validated['reference']);
-        $order   = $id ? Order::with('items.product', 'user', 'payment')->find($id) : null;
+        $order   = Order::findByReference($validated['reference'])
+            ?->load('items.product', 'user', 'payment');
         $contact = trim($validated['contact']);
         $digits  = fn(?string $v) => substr(preg_replace('/\D/', '', (string) $v), -8);
 
@@ -329,10 +421,13 @@ class OrderController extends Controller
 
         return response()->json([
             'data' => [
-                'reference'  => $order->reference,
-                'status'     => $order->status,
-                'total'      => (float) $order->total,
-                'address'    => $order->address,
+                'reference'      => $order->reference,
+                'status'         => $order->status,
+                'subtotal'       => (float) $order->subtotal,
+                'shipping_fee'   => (float) $order->shipping_fee,
+                'discount_total' => (float) $order->discount_total,
+                'total'          => (float) $order->total,
+                'address'        => $order->address,
                 'created_at' => $order->created_at->format('d/m/Y à H:i'),
                 'updated_at' => $order->updated_at->format('d/m/Y à H:i'),
                 'payment'    => $order->payment ? [
@@ -464,10 +559,16 @@ class OrderController extends Controller
         }
 
         DB::transaction(function () use ($order, $newStatus) {
-            // Une commande annulée libère son stock
+            // Une commande annulée libère son stock et rend son code promo
             if ($newStatus === 'cancelled') {
                 foreach ($order->items()->get() as $item) {
                     Product::whereKey($item->product_id)->increment('stock', $item->quantity);
+                }
+
+                if ($order->discount_code) {
+                    Discount::where('code', $order->discount_code)
+                        ->where('used_count', '>', 0)
+                        ->decrement('used_count');
                 }
             }
 
