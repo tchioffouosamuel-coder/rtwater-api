@@ -29,6 +29,15 @@ class ProductResource extends JsonResource
                 ? asset('storage/' . $this->image_url)
                 : null,
 
+            // Fiche technique : « type » dit comment l'afficher, les autres
+            // champs sont nuls selon le cas.
+            'datasheet'    => $this->datasheet_type ? [
+                'type'     => $this->datasheet_type,
+                'text'     => $this->datasheet_type === 'text' ? $this->datasheet_text : null,
+                'url'      => $this->datasheet_path ? asset('storage/' . $this->datasheet_path) : null,
+                'filename' => $this->datasheet_filename,
+            ] : null,
+
             'avg_rating'   => $this->reviews_avg_rating !== null
                 ? round((float) $this->reviews_avg_rating, 1)
                 : null,

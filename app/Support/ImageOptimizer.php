@@ -17,16 +17,26 @@ class ImageOptimizer
     public const MAX_SIZE = 1600;   // côté le plus long, en pixels
     public const QUALITY  = 82;
 
+    /**
+     * Les fiches techniques sont des tableaux de caractéristiques : réduites à
+     * 1600 px, les petits caractères deviennent illisibles.
+     */
+    public const DATASHEET_MAX_SIZE = 2400;
+
     public static function supported(): bool
     {
         return function_exists('imagewebp') && function_exists('imagecreatefromstring');
     }
 
-    /** Stocke un fichier envoyé, optimisé si possible. Retourne le chemin relatif. */
-    public static function store(UploadedFile $file, string $folder, string $disk = 'public'): string
+    /**
+     * Stocke un fichier envoyé, optimisé si possible. Retourne le chemin relatif.
+     *
+     * @param  int|null  $maxSize  côté le plus long, en pixels ; MAX_SIZE par défaut
+     */
+    public static function store(UploadedFile $file, string $folder, string $disk = 'public', ?int $maxSize = null): string
     {
         if (self::supported()) {
-            $webp = self::toWebp((string) file_get_contents($file->getRealPath()));
+            $webp = self::toWebp((string) file_get_contents($file->getRealPath()), $maxSize);
             if ($webp !== null) {
                 $path = trim($folder, '/') . '/' . Str::random(40) . '.webp';
                 Storage::disk($disk)->put($path, $webp);
@@ -61,8 +71,10 @@ class ImageOptimizer
     }
 
     /** Binaire WebP, ou null si l'image est illisible. */
-    public static function toWebp(string $binary): ?string
+    public static function toWebp(string $binary, ?int $maxSize = null): ?string
     {
+        $maxSize = $maxSize ?: self::MAX_SIZE;
+
         try {
             $src = @imagecreatefromstring($binary);
             if (!$src) {
@@ -71,7 +83,7 @@ class ImageOptimizer
 
             $w = imagesx($src);
             $h = imagesy($src);
-            $ratio = min(1, self::MAX_SIZE / max($w, $h));
+            $ratio = min(1, $maxSize / max($w, $h));
             $nw = max(1, (int) round($w * $ratio));
             $nh = max(1, (int) round($h * $ratio));
 

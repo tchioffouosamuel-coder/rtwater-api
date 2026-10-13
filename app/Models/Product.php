@@ -14,6 +14,10 @@ class Product extends Model
         'name',
         'sku',
         'description',
+        'datasheet_type',
+        'datasheet_text',
+        'datasheet_path',
+        'datasheet_filename',
         'price',
         'cost',
         'discount',
@@ -23,6 +27,8 @@ class Product extends Model
         'max_quantity',
         'location',
         'image_url',
+        // Nom de fichier attendu, en attendant l'import d'images en masse
+        'image_filename',
         'is_available',
     ];
 

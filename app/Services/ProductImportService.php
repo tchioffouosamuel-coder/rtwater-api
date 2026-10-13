@@ -8,6 +8,7 @@ use App\Models\ProductImport;
 use App\Models\StockMovement;
 use App\Models\User;
 use App\Support\ImageOptimizer;
+use App\Support\ImportUploads;
 use Illuminate\Http\UploadedFile;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Http;
@@ -83,43 +84,23 @@ class ProductImportService
      */
     public function analyze(UploadedFile $sheet, array $images = [], ?UploadedFile $archive = null): array
     {
-        $this->purgeStaleUploads();
+        ImportUploads::purgeStale();
 
-        $token = Str::random(32);
-        $disk  = Storage::disk('local');
-        $base  = self::TMP_DIR . '/' . $token;
+        $token = ImportUploads::newToken();
 
         $ext       = strtolower($sheet->getClientOriginalExtension() ?: 'xlsx');
-        $sheetPath = $base . '/sheet.' . $ext;
-        $disk->put($sheetPath, (string) file_get_contents($sheet->getRealPath()));
+        $sheetPath = ImportUploads::put(
+            $token,
+            'sheet.' . $ext,
+            (string) file_get_contents($sheet->getRealPath()),
+        );
 
-        $warnings   = [];
-        $imageCount = 0;
+        [$imageCount, $warnings] = ImportUploads::putImages($token, $images, $archive);
 
-        foreach ($images as $image) {
-            if (!$image instanceof UploadedFile) {
-                continue;
-            }
-            $name = $this->safeImageName($image->getClientOriginalName());
-            if ($name === null) {
-                $warnings[] = "Fichier ignoré (format non supporté) : {$image->getClientOriginalName()}";
-                continue;
-            }
-            $disk->put("$base/images/$name", (string) file_get_contents($image->getRealPath()));
-            $imageCount++;
-        }
-
-        if ($archive) {
-            [$extracted, $archiveWarnings] = $this->extractArchive($archive, $disk->path("$base/images"));
-            $imageCount += $extracted;
-            $warnings = array_merge($warnings, $archiveWarnings);
-        }
-
-        $disk->put("$base/meta.json", json_encode([
+        ImportUploads::writeMeta($token, [
             'filename'   => $sheet->getClientOriginalName(),
             'sheet_path' => $sheetPath,
-            'created_at' => now()->toIso8601String(),
-        ], JSON_UNESCAPED_UNICODE));
+        ]);
 
         $preview = $this->buildPreview($token);
         $preview['warnings'] = array_merge($warnings, $preview['warnings']);
@@ -135,9 +116,12 @@ class ProductImportService
      */
     public function buildPreview(string $token): array
     {
-        $meta      = $this->meta($token);
-        $disk      = Storage::disk('local');
-        $sheetPath = $disk->path($meta['sheet_path']);
+        $meta = ImportUploads::readMeta($token);
+        if (!isset($meta['sheet_path'], $meta['filename'])) {
+            throw new \RuntimeException("Import corrompu : relancez l'analyse du fichier.");
+        }
+
+        $sheetPath = Storage::disk('local')->path($meta['sheet_path']);
 
         $raw = $this->readRows($sheetPath);
         if ($raw === []) {
@@ -154,7 +138,7 @@ class ProductImportService
             );
         }
 
-        $imageIndex = $this->indexImages($token);
+        $imageIndex = ImportUploads::indexImages($token);
         $existing   = $this->existingProductsIndex();
         $categories = $this->categoriesIndex();
 
@@ -219,7 +203,12 @@ class ProductImportService
                 'product'  => $data,
                 'existing' => $match ? ['id' => $match['id'], 'name' => $match['name'], 'stock' => $match['stock']] : null,
                 'category' => $categoryState,
-                'image'    => ['source' => $image['source'], 'ref' => $image['ref'] ? basename($image['ref']) : null],
+                'image'    => [
+                    'source'  => $image['source'],
+                    'ref'     => $image['ref'] ? basename($image['ref']) : null,
+                    // Nom declare dans l'Excel mais pas encore televerse
+                    'expects' => $image['expects'],
+                ],
                 'errors'   => $errors,
             ];
         }
@@ -229,6 +218,12 @@ class ProductImportService
         }
         if ($unmapped !== []) {
             $warnings[] = 'Colonnes ignorées (en-tête inconnu) : ' . implode(', ', $unmapped) . '.';
+        }
+
+        $pendingImages = count(array_filter($rows, fn($r) => $r['image']['expects'] !== null));
+        if ($pendingImages > 0) {
+            $warnings[] = "$pendingImages produit(s) attendent une image : leur nom de fichier est "
+                . "enregistré, téléversez les photos depuis « Import d'images ».";
         }
 
         $unusedImages = max(0, count($imageIndex['files']) - $matched);
@@ -253,6 +248,7 @@ class ProductImportService
                 'update'         => count(array_filter($rows, fn($r) => $r['action'] === 'update')),
                 'error'          => count(array_filter($rows, fn($r) => $r['action'] === 'error')),
                 'images'         => $matched,
+                'images_pending'  => $pendingImages,
                 'new_categories' => array_values($newCategories),
             ],
             'images'   => [
@@ -283,7 +279,7 @@ class ProductImportService
         ];
 
         $preview    = $this->buildPreview($token);
-        $imageIndex = $this->indexImages($token);
+        $imageIndex = ImportUploads::indexImages($token);
 
         $counts = ['created' => 0, 'updated' => 0, 'skipped' => 0, 'failed' => 0, 'images' => 0];
         $errors = [];
@@ -313,6 +309,14 @@ class ProductImportService
                 DB::transaction(function () use ($row, $options, $imagePath, $user, &$counts) {
                     $categoryId = $this->resolveCategoryId($row['category'], $options['create_categories']);
                     $attributes = $this->attributesFor($row['product'], $categoryId, $imagePath);
+
+                    // Nom de fichier attendu : cle de rattachement pour l'import
+                    // d'images ulterieur. Efface des que l'image est en place.
+                    if ($row['image']['expects'] !== null) {
+                        $attributes['image_filename'] = $row['image']['expects'];
+                    } elseif ($imagePath !== null) {
+                        $attributes['image_filename'] = null;
+                    }
 
                     if ($row['existing']) {
                         /** @var Product $product */
@@ -370,8 +374,7 @@ class ProductImportService
     /** Supprime le dossier temporaire d'un import abandonné. */
     public function forget(string $token): void
     {
-        $this->assertToken($token);
-        Storage::disk('local')->deleteDirectory(self::TMP_DIR . '/' . $token);
+        ImportUploads::forget($token);
     }
 
     // ═══════════════════════════════════════════════════
@@ -392,7 +395,7 @@ class ProductImportService
             ['stock_min', 'Seuil d\'alerte', 'Optionnel'],
             ['stock_max', 'Stock maximum', 'Optionnel'],
             ['emplacement', 'Emplacement', 'Ex : Entrepôt A — Rayon 3'],
-            ['image', 'Image', 'Nom de fichier dans l\'archive ZIP, ou URL https. Vide = recherche auto'],
+            ['image', 'Image', 'Nom du fichier photo (ex : RTW-B15.jpg), ou URL https. Les photos peuvent etre televersees plus tard'],
             ['disponible', 'Disponible', 'oui / non'],
         ];
 
@@ -451,11 +454,14 @@ class ProductImportService
             '2. Une ligne = un produit. La colonne « reference » (SKU) sert de clé : si elle correspond à un produit',
             '   existant, celui-ci est mis à jour au lieu d\'être recréé. Sans référence, la correspondance se fait sur le nom.',
             '3. Une colonne laissée vide ne remplace pas la valeur déjà enregistrée : utile pour ne mettre à jour que les prix.',
-            '4. Images — trois façons de faire, dans cet ordre de priorité :',
-            '   • colonne « image » = nom de fichier → le fichier est cherché dans l\'archive ZIP téléversée ;',
-            '   • colonne « image » = URL https://... → l\'image est téléchargée automatiquement ;',
-            '   • colonne « image » vide → le système cherche tout seul une image nommée comme la référence',
-            '     (RTW-B15.jpg) ou comme le produit (bouteille-d-eau-1-5-l.png). Les suffixes -1 / _1 sont acceptés.',
+            '4. Images — indiquez simplement le NOM du fichier photo dans la colonne « image »,',
+            '   par exemple RTW-B15.jpg. Vous n\'avez pas besoin d\'avoir les photos sous la main :',
+            '   le nom est enregistré, et vous téléversez toutes les photos en une seule fois plus tard,',
+            '   depuis Produits > Import Excel > onglet « Images ». Le rattachement est automatique.',
+            '   Deux autres possibilités :',
+            '   • colonne « image » = URL https://... → l\'image est téléchargée tout de suite ;',
+            '   • colonne « image » vide → une photo nommée comme la référence (RTW-B15.jpg) ou comme',
+            '     le produit (bouteille-d-eau-1-5-l.png) sera rattachée. Suffixes -1 / _1 acceptés.',
             '5. Toutes les images sont redimensionnées (1600 px) et converties en WebP automatiquement.',
             '6. Les prix acceptent les espaces et séparateurs : « 1 500 », « 1500,50 », « 1,500.50 ».',
             '7. Formats de fichier acceptés : .xlsx, .xls, .csv.',
@@ -848,52 +854,9 @@ class ProductImportService
     // ═══════════════════════════════════════════════════
 
     /**
-     * Indexe les images disponibles pour cet import.
-     *
-     * Trois clés par fichier : le nom complet (« rtw-b15.jpg »), le nom sans
-     * extension normalisé (« rtw-b15 »), et ce même nom privé d'un suffixe
-     * numérique (« rtw-b15-1 » → « rtw-b15 ») pour les séries de photos.
-     *
-     * @return array{files: string[], by_name: array<string,string>, by_stem: array<string,string>}
-     */
-    private function indexImages(string $token): array
-    {
-        $this->assertToken($token);
-
-        $files = Storage::disk('local')->files(self::TMP_DIR . '/' . $token . '/images');
-        sort($files, SORT_NATURAL | SORT_FLAG_CASE);
-
-        $index = ['files' => [], 'by_name' => [], 'by_stem' => []];
-
-        foreach ($files as $path) {
-            $basename = basename($path);
-            if (!in_array(strtolower(pathinfo($basename, PATHINFO_EXTENSION)), self::IMAGE_EXTENSIONS, true)) {
-                continue;
-            }
-
-            $index['files'][] = $path;
-            $index['by_name'][mb_strtolower($basename)] ??= $path;
-
-            $stem = Str::slug(pathinfo($basename, PATHINFO_FILENAME));
-            if ($stem === '') {
-                continue;
-            }
-            $index['by_stem'][$stem] ??= $path;
-
-            // « photo-1.jpg » répond aussi à « photo » : premier fichier de la série
-            $base = preg_replace('/[-_]\d+$/', '', $stem) ?? $stem;
-            if ($base !== '' && $base !== $stem) {
-                $index['by_stem'][$base] ??= $path;
-            }
-        }
-
-        return $index;
-    }
-
-    /**
      * Détermine l'image à rattacher à une ligne, sans rien écrire ni télécharger.
      *
-     * @return array{source:string, ref:?string, warning:?string}
+     * @return array{source:string, ref:?string, expects:?string, warning:?string}
      */
     private function planImage(array $data, array $index): array
     {
@@ -901,29 +864,31 @@ class ProductImportService
 
         if ($value !== null) {
             if (preg_match('#^https?://#i', $value)) {
-                return ['source' => 'url', 'ref' => $value, 'warning' => null];
+                return ['source' => 'url', 'ref' => $value, 'expects' => null, 'warning' => null];
             }
 
             // Chemin de storage (« products/xxx.webp ») : réimport du même fichier.
             // Le slash distingue un chemin d'un simple nom de fichier, qui doit
             // d'abord être cherché dans l'archive téléversée.
             if (str_contains($value, '/') && Storage::disk('public')->exists($value)) {
-                return ['source' => 'existing', 'ref' => $value, 'warning' => null];
+                return ['source' => 'existing', 'ref' => $value, 'expects' => null, 'warning' => null];
             }
 
             $candidate = basename(str_replace('\\', '/', $value));
-            $path = $index['by_name'][mb_strtolower($candidate)]
-                ?? $index['by_stem'][Str::slug(pathinfo($candidate, PATHINFO_FILENAME))]
-                ?? null;
+            $path = ImportUploads::lookup($index, $candidate);
 
             if ($path !== null) {
-                return ['source' => 'archive', 'ref' => $path, 'warning' => null];
+                return ['source' => 'archive', 'ref' => $path, 'expects' => null, 'warning' => null];
             }
 
+            // Fichier pas encore disponible : le nom attendu est enregistré sur le
+            // produit. L'import d'images en masse s'en servira pour rattacher le
+            // fichier plus tard — c'est le flux « Excel d'abord, photos ensuite ».
             return [
                 'source'  => 'none',
                 'ref'     => null,
-                'warning' => "image « $value » introuvable parmi les fichiers téléversés.",
+                'expects' => $candidate,
+                'warning' => null,
             ];
         }
 
@@ -934,11 +899,11 @@ class ProductImportService
             }
             $stem = Str::slug($hint);
             if ($stem !== '' && isset($index['by_stem'][$stem])) {
-                return ['source' => 'archive', 'ref' => $index['by_stem'][$stem], 'warning' => null];
+                return ['source' => 'archive', 'ref' => $index['by_stem'][$stem], 'expects' => null, 'warning' => null];
             }
         }
 
-        return ['source' => 'none', 'ref' => null, 'warning' => null];
+        return ['source' => 'none', 'ref' => null, 'expects' => null, 'warning' => null];
     }
 
     /**
@@ -1014,188 +979,11 @@ class ProductImportService
     /** Convertit en WebP si GD le permet, sinon stocke le fichier tel quel. */
     private function storeImageBytes(string $binary, string $extension): ?string
     {
-        if ($binary === '') {
-            return null;
-        }
-
-        $webp = ImageOptimizer::supported() ? ImageOptimizer::toWebp($binary) : null;
-        if ($webp !== null) {
-            $path = 'products/' . Str::random(40) . '.webp';
-            Storage::disk('public')->put($path, $webp);
-
-            return $path;
-        }
-
-        $extension = in_array(strtolower($extension), self::IMAGE_EXTENSIONS, true) ? strtolower($extension) : 'jpg';
-        $path = 'products/' . Str::random(40) . '.' . $extension;
-        Storage::disk('public')->put($path, $binary);
-
-        return $path;
+        return ImportUploads::storeImageBytes($binary, $extension, 'products');
     }
 
     // ═══════════════════════════════════════════════════
     // ARCHIVE ZIP & DOSSIER TEMPORAIRE
     // ═══════════════════════════════════════════════════
 
-    /**
-     * Extrait les images d'une archive ZIP. Les chemins sont aplatis et filtrés :
-     * seul le nom de fichier est conservé, jamais le sous-chemin de l'archive.
-     *
-     * @return array{0:int, 1:string[]}
-     */
-    private function extractArchive(UploadedFile $archive, string $destination): array
-    {
-        $warnings = [];
-
-        if (!class_exists(\ZipArchive::class)) {
-            return [0, ["L'extension PHP zip est absente du serveur : l'archive n'a pas pu être lue."]];
-        }
-
-        $zip = new \ZipArchive();
-        if ($zip->open($archive->getRealPath()) !== true) {
-            return [0, ["Archive ZIP illisible : {$archive->getClientOriginalName()}."]];
-        }
-
-        if (!is_dir($destination)) {
-            mkdir($destination, 0755, true);
-        }
-
-        $count = 0;
-        $bytes = 0;
-
-        for ($i = 0; $i < $zip->numFiles; $i++) {
-            if ($count >= self::ARCHIVE_MAX_ENTRIES) {
-                $warnings[] = 'Archive tronquée : ' . self::ARCHIVE_MAX_ENTRIES . ' images maximum par import.';
-                break;
-            }
-
-            $stat = $zip->statIndex($i);
-            if ($stat === false || str_ends_with($stat['name'], '/')) {
-                continue;
-            }
-
-            // Dossiers techniques ajoutés par macOS / certains utilitaires
-            if (str_contains($stat['name'], '__MACOSX') || str_starts_with(basename($stat['name']), '.')) {
-                continue;
-            }
-
-            $name = $this->safeImageName(basename(str_replace('\\', '/', $stat['name'])));
-            if ($name === null) {
-                continue;
-            }
-
-            if ($stat['size'] > self::IMAGE_MAX_BYTES) {
-                $warnings[] = "Image ignorée (plus de 8 Mo) : $name.";
-                continue;
-            }
-            if ($bytes + $stat['size'] > self::ARCHIVE_MAX_BYTES) {
-                $warnings[] = 'Archive tronquée : volume décompressé maximum atteint.';
-                break;
-            }
-
-            $contents = $zip->getFromIndex($i);
-            if ($contents === false) {
-                continue;
-            }
-
-            file_put_contents(
-                $destination . DIRECTORY_SEPARATOR . $this->uniqueName($destination, $name),
-                $contents
-            );
-
-            $bytes += $stat['size'];
-            $count++;
-        }
-
-        $zip->close();
-
-        if ($count === 0 && $warnings === []) {
-            $warnings[] = "Aucune image exploitable dans l'archive {$archive->getClientOriginalName()}.";
-        }
-
-        return [$count, $warnings];
-    }
-
-    /** Nom de fichier image sûr, ou null si l'extension n'est pas celle d'une image. */
-    private function safeImageName(string $filename): ?string
-    {
-        $filename  = basename(str_replace('\\', '/', $filename));
-        $extension = strtolower(pathinfo($filename, PATHINFO_EXTENSION));
-
-        if (!in_array($extension, self::IMAGE_EXTENSIONS, true)) {
-            return null;
-        }
-
-        // Le nom reste lisible — il sert au rattachement automatique — mais assaini
-        $stem = preg_replace('/[^\p{L}\p{N}\-_. ]+/u', '-', pathinfo($filename, PATHINFO_FILENAME)) ?? '';
-        $stem = trim(str_replace('..', '.', $stem), '-. ');
-
-        return $stem === '' ? null : mb_substr($stem, 0, 120) . '.' . $extension;
-    }
-
-    private function uniqueName(string $directory, string $name): string
-    {
-        if (!file_exists($directory . DIRECTORY_SEPARATOR . $name)) {
-            return $name;
-        }
-
-        $stem = pathinfo($name, PATHINFO_FILENAME);
-        $ext  = pathinfo($name, PATHINFO_EXTENSION);
-
-        for ($i = 2; $i < 1000; $i++) {
-            $candidate = "$stem($i).$ext";
-            if (!file_exists($directory . DIRECTORY_SEPARATOR . $candidate)) {
-                return $candidate;
-            }
-        }
-
-        return Str::random(16) . '.' . $ext;
-    }
-
-    /** @return array{filename:string, sheet_path:string, created_at:string} */
-    private function meta(string $token): array
-    {
-        $this->assertToken($token);
-
-        $disk = Storage::disk('local');
-        $path = self::TMP_DIR . '/' . $token . '/meta.json';
-
-        if (!$disk->exists($path)) {
-            throw new \RuntimeException("Import expiré ou introuvable : relancez l'analyse du fichier.");
-        }
-
-        $meta = json_decode((string) $disk->get($path), true);
-        if (!is_array($meta) || !isset($meta['sheet_path'], $meta['filename'])) {
-            throw new \RuntimeException("Import corrompu : relancez l'analyse du fichier.");
-        }
-
-        return $meta;
-    }
-
-    /** Le jeton vient du client : il ne doit jamais pouvoir sortir du dossier d'imports. */
-    private function assertToken(string $token): void
-    {
-        if (!preg_match('/^[A-Za-z0-9]{32}$/', $token)) {
-            throw new \RuntimeException("Jeton d'import invalide.");
-        }
-    }
-
-    /** Supprime les imports abandonnés depuis plus de 24 h. */
-    private function purgeStaleUploads(): void
-    {
-        $disk   = Storage::disk('local');
-        $cutoff = now()->subHours(self::TMP_TTL_HOURS)->getTimestamp();
-
-        foreach ($disk->directories(self::TMP_DIR) as $directory) {
-            try {
-                $meta = $directory . '/meta.json';
-                $reference = $disk->exists($meta) ? $disk->lastModified($meta) : 0;
-                if ($reference < $cutoff) {
-                    $disk->deleteDirectory($directory);
-                }
-            } catch (\Throwable $e) {
-                Log::warning('Purge des imports : dossier non supprimé', ['dir' => $directory, 'error' => $e->getMessage()]);
-            }
-        }
-    }
 }

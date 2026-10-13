@@ -15,6 +15,7 @@ use App\Http\Controllers\Api\NewsletterController;
 use App\Http\Controllers\Api\OrderController;
 use App\Http\Controllers\Api\PageController;
 use App\Http\Controllers\Api\ProductController;
+use App\Http\Controllers\Api\ProductImageImportController;
 use App\Http\Controllers\Api\ProductImportController;
 use App\Http\Controllers\Api\QuoteRequestController;
 use App\Http\Controllers\Api\RoleController;
@@ -155,6 +156,12 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::post('/admin/products/import/commit', [ProductImportController::class, 'commit'])->middleware('throttle:20,1');
         Route::post('/admin/products/import/discard', [ProductImportController::class, 'discard']);
         Route::get('/admin/products/imports', [ProductImportController::class, 'history']);
+
+        // Import d'images en masse : second temps du flux, apres l'Excel
+        Route::get('/admin/products/images/pending', [ProductImageImportController::class, 'pending']);
+        Route::post('/admin/products/images/analyze', [ProductImageImportController::class, 'analyze'])->middleware('throttle:20,1');
+        Route::post('/admin/products/images/commit', [ProductImageImportController::class, 'commit'])->middleware('throttle:20,1');
+        Route::post('/admin/products/images/discard', [ProductImageImportController::class, 'discard']);
     });
 
     Route::middleware('permission:manage_services')->group(function () {

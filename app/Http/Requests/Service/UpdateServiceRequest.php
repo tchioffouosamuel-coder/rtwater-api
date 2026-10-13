@@ -2,13 +2,17 @@
 
 namespace App\Http\Requests\Service;
 
+use App\Support\Permissions;
 use Illuminate\Foundation\Http\FormRequest;
 
 class UpdateServiceRequest extends FormRequest
 {
     public function authorize(): bool
     {
-        return $this->user()->isAdmin();
+        return Permissions::userCan($this->user(), Permissions::MANAGE_SERVICES);
+        // Aligne sur la permission exigee par la route. Exiger isAdmin() ici
+        // contredisait le middleware : un gestionnaire passait la route puis
+        // se faisait refuser par le FormRequest.
     }
 
     public function rules(): array

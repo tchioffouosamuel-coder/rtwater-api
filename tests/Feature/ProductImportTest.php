@@ -341,16 +341,26 @@ class ProductImportTest extends TestCase
         $this->assertSame('archive', $preview['rows'][0]['image']['source']);
     }
 
-    public function test_missing_image_is_warned_but_does_not_block_the_row(): void
+    public function test_declared_image_not_yet_uploaded_is_remembered_not_lost(): void
     {
+        // Flux « Excel d'abord, photos ensuite » : le nom declare est conserve
+        // sur le produit pour que l'import d'images le retrouve plus tard.
         $preview = $this->analyze($this->sheet([
             ['nom', 'prix', 'image'],
-            ['Produit', '1000', 'absente.jpg'],
+            ['Produit', '1000', 'a-venir.jpg'],
         ]));
 
         $this->assertSame('create', $preview['rows'][0]['action']);
         $this->assertSame('none', $preview['rows'][0]['image']['source']);
-        $this->assertStringContainsString('absente.jpg', implode(' ', $preview['warnings']));
+        $this->assertSame('a-venir.jpg', $preview['rows'][0]['image']['expects']);
+        $this->assertSame(1, $preview['summary']['images_pending']);
+
+        $this->post('/api/admin/products/import/commit', ['token' => $preview['token']])
+            ->assertCreated();
+
+        $product = Product::firstWhere('name', 'Produit');
+        $this->assertSame('a-venir.jpg', $product->image_filename);
+        $this->assertNull($product->image_url);
     }
 
     public function test_remote_image_url_is_downloaded_and_converted(): void

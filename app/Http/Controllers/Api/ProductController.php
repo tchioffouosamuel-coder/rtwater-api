@@ -8,6 +8,7 @@ use App\Http\Requests\Product\UpdateProductRequest;
 use App\Http\Resources\ProductResource;
 use App\Models\Product;
 use App\Models\Setting;
+use App\Support\DatasheetStorage;
 use App\Support\ImageOptimizer;
 use Illuminate\Http\Request;
 use Illuminate\Http\JsonResponse;
@@ -77,6 +78,13 @@ class ProductController extends Controller
             // ex: "products/AbCdEf123456.jpg"
         }
 
+        // Fiche technique : texte, image ou PDF selon datasheet_type
+        $validated = array_merge($validated, DatasheetStorage::attributesFor(
+            $validated,
+            $request->file('datasheet_file'),
+        ));
+        unset($validated['datasheet_file']);
+
         $product = Product::create($validated);
         $product->load('category');
 
@@ -112,7 +120,21 @@ class ProductController extends Controller
             $validated['image_url'] = ImageOptimizer::store($request->file('image_url'), 'products');
         }
 
+        $previousDatasheet = $product->datasheet_path;
+
+        $validated = array_merge($validated, DatasheetStorage::attributesFor(
+            $validated,
+            $request->file('datasheet_file'),
+            $product,
+        ));
+        unset($validated['datasheet_file']);
+
         $product->update($validated);
+
+        // L'ancien fichier n'est supprime qu'une fois le produit enregistre :
+        // si l'ecriture echoue, la fiche d'origine est toujours servie.
+        DatasheetStorage::forget($previousDatasheet, $product->datasheet_path);
+
         $product->load('category');
 
         return response()->json([
@@ -128,6 +150,8 @@ class ProductController extends Controller
             // Supprime l'image du storage quand on supprime le produit
             // Évite les fichiers orphelins qui prennent de la place
         }
+
+        DatasheetStorage::forget($product->datasheet_path);
 
         $product->delete();
 

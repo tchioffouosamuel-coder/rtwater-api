@@ -2,13 +2,18 @@
 
 namespace App\Http\Requests\Product;
 
+use App\Support\DatasheetStorage;
+use App\Support\Permissions;
 use Illuminate\Foundation\Http\FormRequest;
 
 class UpdateProductRequest extends FormRequest
 {
     public function authorize(): bool
     {
-        return $this->user()->isAdmin();
+        return Permissions::userCan($this->user(), Permissions::MANAGE_PRODUCTS);
+        // Aligne sur la permission exigee par la route. Exiger isAdmin() ici
+        // contredisait le middleware : un gestionnaire passait la route puis
+        // se faisait refuser par le FormRequest.
     }
 
     public function rules(): array
@@ -28,7 +33,7 @@ class UpdateProductRequest extends FormRequest
             'location'     => 'nullable|string|max:255',
             'image_url'    => 'nullable|image|max:8192',
             'is_available' => 'sometimes|boolean',
-        ];
+        ] + DatasheetStorage::rules(partial: true);
     }
 
     public function messages(): array
@@ -40,6 +45,6 @@ class UpdateProductRequest extends FormRequest
             'stock.integer'      => 'Le stock doit être un nombre entier',
             'image_url.image'    => 'Le fichier doit être une image',
             'image_url.max'      => 'L\'image ne doit pas dépasser 8 Mo',
-        ];
+        ] + DatasheetStorage::messages();
     }
 }
