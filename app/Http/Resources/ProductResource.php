@@ -29,6 +29,10 @@ class ProductResource extends JsonResource
                 ? asset('storage/' . $this->image_url)
                 : null,
 
+            // Nom de photo declare dans l'Excel et pas encore televerse.
+            // Renseigne uniquement tant que le produit n'a pas d'image.
+            'awaiting_image' => $this->image_url === null ? $this->image_filename : null,
+
             // Fiche technique : « type » dit comment l'afficher, les autres
             // champs sont nuls selon le cas.
             'datasheet'    => $this->datasheet_type ? [

@@ -74,8 +74,9 @@ class ProductController extends Controller
 
         if ($request->hasFile('image_url')) {
             $validated['image_url'] = ImageOptimizer::store($request->file('image_url'), 'products');
-            // Sauvegarde l'image et stocke le chemin dans $validated
-            // ex: "products/AbCdEf123456.jpg"
+            // L'attente d'image est levee : le produit n'a plus a figurer dans
+            // la liste des photos a fournir.
+            $validated['image_filename'] = null;
         }
 
         // Fiche technique : texte, image ou PDF selon datasheet_type
@@ -118,6 +119,7 @@ class ProductController extends Controller
             }
 
             $validated['image_url'] = ImageOptimizer::store($request->file('image_url'), 'products');
+            $validated['image_filename'] = null;
         }
 
         $previousDatasheet = $product->datasheet_path;
